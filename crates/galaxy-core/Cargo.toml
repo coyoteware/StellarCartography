@@ -1,0 +1,15 @@
+[package]
+name = "galaxy-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared data formats for StellarCartography: id64 decoding, octree tiles, journal parsing"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rustc-hash = "2"
+
+[dev-dependencies]
+tempfile = "3"

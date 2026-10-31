@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>StellarCartography</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="viewport"></div>
+
+    <div class="panel" id="search-panel">
+      <input id="search" type="search" placeholder="Search systems…" autocomplete="off" spellcheck="false" />
+      <ul id="search-results" hidden></ul>
+      <div class="buttons">
+        <button id="go-sol" type="button">Sol</button>
+        <button id="go-galaxy" type="button">Galaxy</button>
+        <button id="go-cmdr" type="button" hidden>Commander</button>
+      </div>
+    </div>
+
+    <div class="panel" id="layers-panel">
+      <label><input type="checkbox" id="layer-glow" checked /> Galaxy glow</label>
+      <label><input type="checkbox" id="layer-stars" checked /> Known systems</label>
+      <label><input type="checkbox" id="layer-route" checked /> Travel history</label>
+      <label class="budget">Point budget <select id="budget">
+        <option value="2000000">2M</option>
+        <option value="5000000" selected>5M</option>
+        <option value="10000000">10M</option>
+        <option value="20000000">20M</option>
+      </select></label>
+      <div id="commander" hidden>
+        <select id="commander-select"></select>
+        <div id="commander-location"></div>
+      </div>
+    </div>
+
+    <div class="panel" id="info-panel" hidden></div>
+
+    <div id="hud"></div>
+    <div id="help">Drag to rotate · right-drag to pan · scroll to zoom · click a star for details</div>
+    <div id="notice" hidden></div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = ["crates/galaxy-core", "crates/ingest", "app/src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[profile.release]
+debug = 1
+
+# The ingest crunches ~87M records; keep dependencies optimised even in dev builds.
+[profile.dev.package."*"]
+opt-level = 3

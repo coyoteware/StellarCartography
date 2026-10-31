@@ -1,0 +1,13 @@
+# Rust
+/target/
+**/target/
+
+# Node / Vite
+node_modules/
+app/dist/
+
+# Generated galaxy data (SQLite, octree tiles, density maps)
+/data/
+
+# Tauri generated
+app/src-tauri/gen/

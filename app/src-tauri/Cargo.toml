@@ -1,0 +1,21 @@
+[package]
+name = "stellar-cartography"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Standalone Elite: Dangerous galaxy map viewer"
+
+[lib]
+name = "stellar_cartography_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+galaxy-core = { path = "../../crates/galaxy-core" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rusqlite.workspace = true
+tauri = { version = "2", features = [] }
