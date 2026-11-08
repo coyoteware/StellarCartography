@@ -80,8 +80,15 @@ installed app won't find the repo's `data/` by itself: on first run, choose
 
 ```bash
 cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 pnpm --dir app typecheck
 ```
+
+GitHub Actions ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs the
+same checks on Windows on every push, after a frozen-lockfile install and a
+frontend build. Pushes to `main` also build the installer and attach it to the
+run as an artifact (kept 14 days); for any other branch, start the workflow
+from the Actions tab with "Run workflow".
 
 ## Data and credits
 

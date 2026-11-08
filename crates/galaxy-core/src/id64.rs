@@ -71,6 +71,9 @@ impl Id64 {
 }
 
 #[cfg(test)]
+// Coordinates are exact multiples of 1/32 ly, which f32 holds exactly;
+// clippy only sees more digits than f32 prints.
+#[allow(clippy::excessive_precision)]
 mod tests {
     use super::*;
 

@@ -1,0 +1,93 @@
+# Tests every push. Builds the Windows installer for pushes to main, or on
+# request from the Actions tab (Run workflow) for any branch.
+#
+# Everything runs on Windows: the app is Windows-only (journal paths,
+# WebView2), and Windows runner minutes count double on private repos, so
+# the slow installer build doesn't run on every push.
+name: CI
+
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      installer:
+        description: Build the installer too
+        type: boolean
+        default: true
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Incremental artifacts only bloat the cache on CI.
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  test:
+    name: Test
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: app/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+      - name: Install frontend dependencies
+        working-directory: app
+        run: pnpm install --frozen-lockfile
+      # `build` is `tsc && vite build`, so this also typechecks. The Rust
+      # build below expects app/dist to exist.
+      - name: Typecheck and build the frontend
+        working-directory: app
+        run: pnpm build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Rust tests
+        run: cargo test --workspace --locked
+
+  installer:
+    name: Installer
+    needs: test
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && inputs.installer)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: app/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+      - name: Install frontend dependencies
+        working-directory: app
+        run: pnpm install --frozen-lockfile
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the installer
+        working-directory: app
+        run: pnpm tauri build
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: StellarCartography-installer-${{ github.sha }}
+          path: target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+          retention-days: 14

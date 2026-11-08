@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     /// Galaxy data folder; unset means "find it" (see `resolve_data_dir`).
@@ -30,12 +30,6 @@ pub struct ViewSettings {
 impl Default for ViewSettings {
     fn default() -> Self {
         Self { point_budget: 5_000_000, exposure: 1.0, glow: true, stars: true, route: true }
-    }
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self { data_dir: None, journal_dir: None, view: ViewSettings::default() }
     }
 }
 
@@ -74,9 +68,11 @@ mod tests {
         let path = dir.path().join("nested").join("settings.json");
         assert_eq!(Settings::load(&path), Settings::default());
 
-        let mut s = Settings::default();
-        s.data_dir = Some(PathBuf::from(r"D:\galaxy"));
-        s.view.point_budget = 10_000_000;
+        let s = Settings {
+            data_dir: Some(PathBuf::from(r"D:\galaxy")),
+            view: ViewSettings { point_budget: 10_000_000, ..Default::default() },
+            ..Default::default()
+        };
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), s);
 

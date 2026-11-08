@@ -187,7 +187,7 @@ fn build_node(
                     scope.spawn(move || build_node(child, child_key, cmin, half, depth + 1, out_dir, params, nodes))
                 })
                 .collect();
-            handles.into_iter().map(|h| h.join().unwrap()).collect::<Result<()>>()
+            handles.into_iter().try_for_each(|h| h.join().unwrap())
         })
     } else {
         for (octant, child) in slices {
@@ -285,8 +285,8 @@ pub fn write_tile(path: &Path, min: Vec3, size: f32, points: &[Point]) -> Result
         w.write_all(&p.rowid.to_le_bytes())?;
     }
     for p in points {
-        for axis in 0..3 {
-            w.write_all(&quantise(p.pos[axis], min[axis], size).to_le_bytes())?;
+        for (&v, &m) in p.pos.iter().zip(&min) {
+            w.write_all(&quantise(v, m, size).to_le_bytes())?;
         }
     }
     for p in points {
