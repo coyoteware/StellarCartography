@@ -69,7 +69,8 @@ const fragmentShader = /* glsl */ `
       float near = smoothstep(30.0, 1500.0, tt);
       acc += colour * d * d * profile * near * dt;
     }
-    gl_FragColor = vec4(1.0 - exp(-acc * uIntensity), 1.0);
+    // Linear light; the tone mapping pass in view.ts compresses it.
+    gl_FragColor = vec4(acc * uIntensity, 1.0);
   }
 `;
 

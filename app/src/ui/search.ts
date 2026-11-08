@@ -1,7 +1,12 @@
 import { searchSystems, type SystemInfo } from "../api";
 
 /** Debounced prefix search with keyboard navigation. */
-export function setupSearch(input: HTMLInputElement, list: HTMLUListElement, onPick: (s: SystemInfo) => void): void {
+export function setupSearch(
+  input: HTMLInputElement,
+  list: HTMLUListElement,
+  onPick: (s: SystemInfo) => void,
+  onError: (e: unknown) => void,
+): void {
   let results: SystemInfo[] = [];
   let active = 0;
   let timer = 0;
@@ -42,7 +47,13 @@ export function setupSearch(input: HTMLInputElement, list: HTMLUListElement, onP
     const query = input.value;
     timer = window.setTimeout(async () => {
       const mine = ++seq;
-      const found = query.trim().length < 2 ? [] : await searchSystems(query).catch(() => []);
+      const found =
+        query.trim().length < 2
+          ? []
+          : await searchSystems(query).catch((e) => {
+              onError(e);
+              return [];
+            });
       if (mine !== seq) return; // a newer query is in flight
       results = found;
       active = 0;

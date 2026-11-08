@@ -14,8 +14,13 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 galaxy-core = { path = "../../crates/galaxy-core" }
+ingest = { path = "../../crates/ingest", default-features = false }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 rusqlite.workspace = true
 tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+
+[dev-dependencies]
+tempfile = "3"

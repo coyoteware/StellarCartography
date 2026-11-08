@@ -16,6 +16,7 @@
         <button id="go-sol" type="button">Sol</button>
         <button id="go-galaxy" type="button">Galaxy</button>
         <button id="go-cmdr" type="button" hidden>Commander</button>
+        <button id="open-settings" type="button" class="push" title="Settings">Settings</button>
       </div>
     </div>
 
@@ -23,12 +24,6 @@
       <label><input type="checkbox" id="layer-glow" checked /> Galaxy glow</label>
       <label><input type="checkbox" id="layer-stars" checked /> Known systems</label>
       <label><input type="checkbox" id="layer-route" checked /> Travel history</label>
-      <label class="budget">Point budget <select id="budget">
-        <option value="2000000">2M</option>
-        <option value="5000000" selected>5M</option>
-        <option value="10000000">10M</option>
-        <option value="20000000">20M</option>
-      </select></label>
       <div id="commander" hidden>
         <select id="commander-select"></select>
         <div id="commander-location"></div>
@@ -39,7 +34,106 @@
 
     <div id="hud"></div>
     <div id="help">Drag to rotate · right-drag to pan · scroll to zoom · click a star for details</div>
-    <div id="notice" hidden></div>
+    <div id="hover-label" hidden></div>
+    <div id="toasts"></div>
+
+    <div class="card" id="setup" hidden>
+      <h1>Set up the galaxy catalogue</h1>
+      <p>
+        StellarCartography draws every system in EDSM's catalogue, so it keeps its own copy. It's built once from
+        EDSM's nightly dump; rebuild it later from Settings to pick up new systems.
+      </p>
+      <p class="problem" id="setup-problem" hidden></p>
+      <section>
+        <h2>Download and build</h2>
+        <p class="muted">
+          Streams the latest dump (about 3.4 GB, not kept) and builds about 10 GB of data. Takes 10–15 minutes.
+        </p>
+        <div class="path-row"><code id="setup-dir"></code><button id="setup-change" type="button">Change…</button></div>
+        <button id="setup-build" type="button" class="primary">Download and build</button>
+      </section>
+      <section>
+        <h2>Already built?</h2>
+        <p class="muted">Use the folder from an earlier build (it holds <code>tiles</code> and <code>galaxy.sqlite</code>).</p>
+        <button id="setup-existing" type="button">Choose folder…</button>
+      </section>
+    </div>
+
+    <div class="card" id="build" hidden>
+      <h1 id="build-title">Building the galaxy catalogue</h1>
+      <ol id="build-steps">
+        <li>Download and read the EDSM dump</li>
+        <li>Build star tiles</li>
+        <li>Draw density maps</li>
+        <li>Index names for search</li>
+      </ol>
+      <div class="bar"><div id="build-bar"></div></div>
+      <div id="build-detail" class="muted"></div>
+      <p class="problem" id="build-error" hidden></p>
+      <div class="buttons">
+        <button id="build-cancel" type="button">Cancel</button>
+        <button id="build-retry" type="button" class="primary" hidden>Try again</button>
+        <button id="build-close" type="button" hidden>Close</button>
+      </div>
+    </div>
+
+    <div class="card" id="settings" hidden>
+      <header>
+        <h1>Settings</h1>
+        <button id="settings-close" type="button" class="close" aria-label="Close">×</button>
+      </header>
+      <section>
+        <h2>Galaxy catalogue</h2>
+        <div id="set-dataset"></div>
+        <div class="path-row"><code id="set-data-dir"></code></div>
+        <div id="set-data-origin" class="muted small"></div>
+        <div class="buttons">
+          <button id="set-data-change" type="button">Use another folder…</button>
+          <button id="set-rebuild" type="button">Rebuild from EDSM…</button>
+        </div>
+        <div id="set-rebuild-confirm" class="confirm" hidden>
+          <p>
+            Downloads the latest dump (about 3.4 GB) and rebuilds the catalogue, which takes 10–15 minutes. The map
+            stays usable meanwhile. The new copy needs about 10 GB of free space until it replaces the old one.
+          </p>
+          <div class="buttons">
+            <button id="set-rebuild-go" type="button" class="primary">Rebuild</button>
+            <button id="set-rebuild-cancel" type="button">Cancel</button>
+          </div>
+        </div>
+      </section>
+      <section>
+        <h2>Journal folder</h2>
+        <div class="path-row"><code id="set-journal-dir"></code></div>
+        <div id="set-journal-status" class="muted small"></div>
+        <div class="buttons">
+          <button id="set-journal-change" type="button">Change…</button>
+          <button id="set-journal-reset" type="button" hidden>Use default</button>
+        </div>
+      </section>
+      <section>
+        <h2>Display</h2>
+        <label class="row">
+          Point budget
+          <select id="set-budget">
+            <option value="2000000">2M</option>
+            <option value="5000000">5M</option>
+            <option value="10000000">10M</option>
+            <option value="20000000">20M</option>
+          </select>
+        </label>
+        <label class="row">
+          Brightness
+          <span class="range">
+            <input type="range" id="set-exposure" min="-2" max="2" step="0.1" value="0" />
+            <button id="set-exposure-reset" type="button">Reset</button>
+          </span>
+        </label>
+        <p class="muted small">
+          A bigger point budget shows more stars at once but costs more GPU time; 2M suits integrated graphics.
+        </p>
+      </section>
+    </div>
 
     <script type="module" src="/src/main.ts"></script>
   </body>

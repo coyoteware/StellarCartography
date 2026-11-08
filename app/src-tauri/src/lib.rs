@@ -1,35 +1,72 @@
 //! Tauri backend: serves the generated galaxy data to the web view, answers
-//! system lookups from `galaxy.sqlite`, and tails the player journal.
+//! system lookups from `galaxy.sqlite`, tails the player journal, keeps the
+//! user's settings, and runs the catalogue build (first run and rebuilds).
+
+mod data;
+mod settings;
 
 use std::path::{Component, Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
+use data::{DataStatus, Dataset, DirOrigin};
 use galaxy_core::id64::Id64;
 use galaxy_core::journal::{CommanderSource, CommanderTrack, Jump, JournalSource};
 use galaxy_core::visited::{self, VisitedEntry};
-use rusqlite::{Connection, OpenFlags, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
+use settings::{Settings, ViewSettings};
 use tauri::http::{header, Response, StatusCode};
-use tauri::{Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_dialog::DialogExt;
 
 /// The custom scheme the web view fetches tiles and density maps from:
 /// `http://galaxy.localhost/<path>` on Windows, `galaxy://localhost/<path>` elsewhere.
 const SCHEME: &str = "galaxy";
 
 struct AppState {
-    data_dir: Option<PathBuf>,
-    db: Option<Mutex<Connection>>,
-    commander: Option<Mutex<JournalSource>>,
+    settings_path: PathBuf,
+    settings: Mutex<Settings>,
+    data: RwLock<DataSlot>,
+    commander: Mutex<Option<JournalSource>>,
+    build: Mutex<Option<BuildJob>>,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DatasetInfo {
-    data_dir: String,
-    systems: Option<String>,
-    source: Option<String>,
-    source_last_modified: Option<String>,
+/// The current data folder and, when it holds a usable build, the open dataset.
+struct DataSlot {
+    dir: PathBuf,
+    origin: DirOrigin,
+    dataset: Option<Dataset>,
+    error: Option<String>,
+}
+
+impl DataSlot {
+    fn load(dir: PathBuf, origin: DirOrigin) -> Self {
+        let (dataset, error) = match data::open(&dir) {
+            Ok(ds) => (ds, None),
+            Err(e) => {
+                eprintln!("galaxy data in {}: {e}", dir.display());
+                (None, Some(e))
+            }
+        };
+        Self { dir, origin, dataset, error }
+    }
+
+    fn status(&self) -> DataStatus {
+        let dir = self.dir.display().to_string();
+        match (&self.dataset, &self.error) {
+            (Some(ds), _) => ds.status(),
+            (None, Some(error)) => DataStatus::Broken { dir, error: error.clone() },
+            (None, None) => DataStatus::Missing { dir },
+        }
+    }
+}
+
+struct BuildJob {
+    dir: PathBuf,
+    cancel: Arc<AtomicBool>,
+    last: Option<ingest::Progress>,
 }
 
 #[derive(Serialize)]
@@ -45,7 +82,9 @@ struct SystemInfo {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CommanderPayload {
-    journal_dir: String,
+    journal_dir: Option<String>,
+    /// False when the journal folder doesn't exist.
+    found: bool,
     commanders: Vec<CommanderTrack>,
     latest_fid: Option<String>,
 }
@@ -57,25 +96,55 @@ struct JumpEvent {
     jump: Jump,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SettingsView {
+    data_dir: String,
+    data_dir_origin: DirOrigin,
+    journal_dir: Option<String>,
+    journal_dir_custom: bool,
+    journal_dir_found: bool,
+    view: ViewSettings,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct BuildStatus {
+    dir: String,
+    progress: Option<ingest::Progress>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct BuildDone {
+    ok: bool,
+    cancelled: bool,
+    error: Option<String>,
+    systems: Option<u64>,
+    seconds: Option<f64>,
+}
+
 type CmdResult<T> = Result<T, String>;
 
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
+fn display(p: &Path) -> String {
+    p.display().to_string()
+}
+
+/// Runs `f` against the open database, or returns `empty` when there's no data.
+fn with_db<T>(state: &AppState, empty: T, f: impl FnOnce(&Connection) -> CmdResult<T>) -> CmdResult<T> {
+    let slot = state.data.read().map_err(err)?;
+    let Some(ds) = &slot.dataset else { return Ok(empty) };
+    let db = ds.db.lock().map_err(err)?;
+    f(&db)
+}
+
 #[tauri::command]
-fn dataset_info(state: State<AppState>) -> Option<DatasetInfo> {
-    let dir = state.data_dir.as_ref()?;
-    let meta = |key: &str| -> Option<String> {
-        let db = state.db.as_ref()?.lock().ok()?;
-        db.query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0)).optional().ok()?
-    };
-    Some(DatasetInfo {
-        data_dir: dir.display().to_string(),
-        systems: meta("systems"),
-        source: meta("source"),
-        source_last_modified: meta("source_last_modified"),
-    })
+fn dataset_info(state: State<AppState>) -> CmdResult<DataStatus> {
+    Ok(state.data.read().map_err(err)?.status())
 }
 
 fn row_to_system(r: &rusqlite::Row) -> rusqlite::Result<SystemInfo> {
@@ -94,59 +163,68 @@ const SYSTEM_COLUMNS: &str = "id, id64, name, x32, y32, z32";
 /// Case-insensitive prefix search; an exact match is listed first.
 #[tauri::command]
 fn search_systems(state: State<AppState>, query: String) -> CmdResult<Vec<SystemInfo>> {
-    let Some(db) = &state.db else { return Ok(Vec::new()) };
     // `%` and `_` are LIKE wildcards; system names don't use them.
     let q: String = query.trim().chars().filter(|c| *c != '%' && *c != '_').collect();
     if q.is_empty() {
         return Ok(Vec::new());
     }
-    let db = db.lock().map_err(err)?;
-    let mut exact = db
-        .prepare_cached(&format!("SELECT {SYSTEM_COLUMNS} FROM systems WHERE name = ?1 LIMIT 5"))
-        .map_err(err)?
-        .query_map([&q], row_to_system)
-        .map_err(err)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(err)?;
-    let prefix = db
-        .prepare_cached(&format!("SELECT {SYSTEM_COLUMNS} FROM systems WHERE name LIKE ?1 ORDER BY name LIMIT 20"))
-        .map_err(err)?
-        .query_map([format!("{q}%")], row_to_system)
-        .map_err(err)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(err)?;
-    for s in prefix {
-        if exact.len() >= 20 {
-            break;
+    with_db(&state, Vec::new(), |db| {
+        let mut exact = db
+            .prepare_cached(&format!("SELECT {SYSTEM_COLUMNS} FROM systems WHERE name = ?1 LIMIT 5"))
+            .map_err(err)?
+            .query_map([&q], row_to_system)
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+        let prefix = db
+            .prepare_cached(&format!("SELECT {SYSTEM_COLUMNS} FROM systems WHERE name LIKE ?1 ORDER BY name LIMIT 20"))
+            .map_err(err)?
+            .query_map([format!("{q}%")], row_to_system)
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+        for s in prefix {
+            if exact.len() >= 20 {
+                break;
+            }
+            if !exact.iter().any(|e| e.rowid == s.rowid) {
+                exact.push(s);
+            }
         }
-        if !exact.iter().any(|e| e.rowid == s.rowid) {
-            exact.push(s);
-        }
-    }
-    Ok(exact)
+        Ok(exact)
+    })
 }
 
 #[tauri::command]
 fn get_system(state: State<AppState>, rowid: u32) -> CmdResult<Option<SystemInfo>> {
-    let Some(db) = &state.db else { return Ok(None) };
-    let db = db.lock().map_err(err)?;
-    let mut stmt = db
-        .prepare_cached(&format!("SELECT {SYSTEM_COLUMNS} FROM systems WHERE id = ?1"))
-        .map_err(err)?;
-    stmt.query_row([rowid], row_to_system).optional().map_err(err)
+    with_db(&state, None, |db| {
+        let mut stmt = db
+            .prepare_cached(&format!("SELECT {SYSTEM_COLUMNS} FROM systems WHERE id = ?1"))
+            .map_err(err)?;
+        stmt.query_row([rowid], row_to_system).optional().map_err(err)
+    })
 }
 
 #[tauri::command]
-fn commander_history(state: State<AppState>) -> CmdResult<Option<CommanderPayload>> {
-    let Some(source) = &state.commander else { return Ok(None) };
-    let mut source = source.lock().map_err(err)?;
-    let journal_dir = source.dir().display().to_string();
+fn commander_history(state: State<AppState>) -> CmdResult<CommanderPayload> {
+    let configured = journal_dir(&*state.settings.lock().map_err(err)?);
+    let mut source = state.commander.lock().map_err(err)?;
+    let Some(source) = source.as_mut() else {
+        return Ok(CommanderPayload {
+            journal_dir: configured.as_deref().map(display),
+            found: false,
+            commanders: Vec::new(),
+            latest_fid: None,
+        });
+    };
+    let dir = display(source.dir());
     let history = source.history().map_err(err)?;
-    Ok(Some(CommanderPayload {
-        journal_dir,
+    Ok(CommanderPayload {
+        journal_dir: Some(dir),
+        found: true,
         latest_fid: history.latest().map(|c| c.fid.clone()),
         commanders: history.commanders.values().cloned().collect(),
-    }))
+    })
 }
 
 #[derive(Serialize)]
@@ -174,7 +252,8 @@ fn visited_systems(state: State<AppState>) -> CmdResult<Vec<VisitedSystem>> {
     entries.sort_by_key(|e| e.id64);
     entries.dedup_by_key(|e| e.id64);
 
-    let db = state.db.as_ref().map(|d| d.lock()).transpose().map_err(err)?;
+    let slot = state.data.read().map_err(err)?;
+    let db = slot.dataset.as_ref().map(|d| d.db.lock()).transpose().map_err(err)?;
     let mut lookup = match &db {
         Some(db) => Some(db.prepare_cached("SELECT name, x32, y32, z32 FROM systems WHERE id64 = ?1").map_err(err)?),
         None => None,
@@ -202,20 +281,212 @@ fn visited_systems(state: State<AppState>) -> CmdResult<Vec<VisitedSystem>> {
     Ok(out)
 }
 
-/// `STELLAR_DATA_DIR`, else the nearest `data/` folder holding tiles, searching
-/// upwards from the working directory and then from the executable.
-fn find_data_dir() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("STELLAR_DATA_DIR") {
-        return Some(PathBuf::from(dir));
-    }
-    let starts = [std::env::current_dir().ok(), std::env::current_exe().ok()];
-    starts.into_iter().flatten().find_map(|start| {
-        start
-            .ancestors()
-            .map(|a| a.join("data"))
-            .find(|d| d.join("tiles").join("index.json").is_file())
+// --- Settings ----------------------------------------------------------------
+
+fn journal_dir(settings: &Settings) -> Option<PathBuf> {
+    settings.journal_dir.clone().or_else(galaxy_core::journal::default_journal_dir)
+}
+
+fn open_commander(dir: PathBuf) -> Option<JournalSource> {
+    dir.is_dir().then(|| JournalSource::new(dir))
+}
+
+fn save_settings(state: &AppState, settings: &Settings) -> CmdResult<()> {
+    settings.save(&state.settings_path).map_err(|e| format!("couldn't save settings: {e}"))
+}
+
+// Lock order, where more than one is held: build, then data, then settings.
+
+#[tauri::command]
+fn get_settings(state: State<AppState>) -> CmdResult<SettingsView> {
+    let (data_dir, data_dir_origin) = {
+        let slot = state.data.read().map_err(err)?;
+        (display(&slot.dir), slot.origin)
+    };
+    let settings = state.settings.lock().map_err(err)?;
+    let journal = journal_dir(&settings);
+    Ok(SettingsView {
+        data_dir,
+        data_dir_origin,
+        journal_dir_found: journal.as_ref().is_some_and(|d| d.is_dir()),
+        journal_dir: journal.as_deref().map(display),
+        journal_dir_custom: settings.journal_dir.is_some(),
+        view: settings.view.clone(),
     })
 }
+
+#[tauri::command]
+fn save_view_settings(state: State<AppState>, view: ViewSettings) -> CmdResult<()> {
+    let mut settings = state.settings.lock().map_err(err)?;
+    if settings.view != view {
+        settings.view = view;
+        save_settings(&state, &settings)?;
+    }
+    Ok(())
+}
+
+/// Switches to an existing build in `dir` (or in a `data` folder inside it).
+#[tauri::command]
+fn use_data_dir(state: State<AppState>, dir: String) -> CmdResult<DataStatus> {
+    let found = data::locate_existing(Path::new(&dir))
+        .ok_or("That folder doesn't hold StellarCartography data (a tiles folder and galaxy.sqlite).")?;
+    if state.build.lock().map_err(err)?.is_some() {
+        return Err("Wait for the catalogue build to finish first.".into());
+    }
+    let mut slot = state.data.write().map_err(err)?;
+    if slot.origin == DirOrigin::Environment {
+        return Err("The data folder is set by STELLAR_DATA_DIR.".into());
+    }
+    let next = DataSlot::load(found.clone(), DirOrigin::Settings);
+    if let Some(e) = &next.error {
+        return Err(format!("Couldn't open the data there: {e}"));
+    }
+    let mut settings = state.settings.lock().map_err(err)?;
+    settings.data_dir = Some(found);
+    save_settings(&state, &settings)?;
+    *slot = next;
+    Ok(slot.status())
+}
+
+/// Sets the journal folder; `None` goes back to the game's default.
+#[tauri::command]
+fn set_journal_dir(state: State<AppState>, dir: Option<String>) -> CmdResult<()> {
+    let dir = dir.map(PathBuf::from);
+    if let Some(d) = &dir {
+        if !d.is_dir() {
+            return Err(format!("{} isn't a folder.", d.display()));
+        }
+    }
+    let mut settings = state.settings.lock().map_err(err)?;
+    settings.journal_dir = dir;
+    save_settings(&state, &settings)?;
+    *state.commander.lock().map_err(err)? = journal_dir(&settings).and_then(open_commander);
+    Ok(())
+}
+
+#[tauri::command]
+async fn pick_folder(app: AppHandle, title: String, start: Option<String>) -> Option<String> {
+    let mut dialog = app.dialog().file().set_title(title);
+    if let Some(start) = start.filter(|s| Path::new(s).is_dir()) {
+        dialog = dialog.set_directory(start);
+    }
+    dialog.blocking_pick_folder().and_then(|p| p.into_path().ok()).map(|p| display(&p))
+}
+
+// --- Catalogue build ---------------------------------------------------------
+
+/// Starts building the catalogue from EDSM into `dir` (default: the current
+/// data folder). Progress arrives as `build-progress` events and the end as
+/// `build-done`. `limit` stops after that many systems, for testing.
+#[tauri::command]
+fn start_build(app: AppHandle, state: State<AppState>, dir: Option<String>, limit: Option<u64>) -> CmdResult<String> {
+    let mut job = state.build.lock().map_err(err)?;
+    if job.is_some() {
+        return Err("A build is already running.".into());
+    }
+    let (current, origin) = {
+        let slot = state.data.read().map_err(err)?;
+        (slot.dir.clone(), slot.origin)
+    };
+    let target = dir.map(PathBuf::from).unwrap_or(current.clone());
+    if origin == DirOrigin::Environment && target != current {
+        return Err("The data folder is set by STELLAR_DATA_DIR.".into());
+    }
+    std::fs::create_dir_all(&target).map_err(|e| format!("Can't create {}: {e}", target.display()))?;
+    let cancel = Arc::new(AtomicBool::new(false));
+    *job = Some(BuildJob { dir: target.clone(), cancel: cancel.clone(), last: None });
+    let t = target.clone();
+    std::thread::Builder::new()
+        .name("catalogue-build".into())
+        .spawn(move || run_build(app, t, limit, cancel))
+        .map_err(err)?;
+    Ok(display(&target))
+}
+
+#[tauri::command]
+fn cancel_build(state: State<AppState>) -> CmdResult<bool> {
+    let job = state.build.lock().map_err(err)?;
+    if let Some(job) = job.as_ref() {
+        job.cancel.store(true, Ordering::Relaxed);
+    }
+    Ok(job.is_some())
+}
+
+#[tauri::command]
+fn build_status(state: State<AppState>) -> CmdResult<Option<BuildStatus>> {
+    let job = state.build.lock().map_err(err)?;
+    Ok(job.as_ref().map(|j| BuildStatus { dir: display(&j.dir), progress: j.last.clone() }))
+}
+
+fn run_build(app: AppHandle, dir: PathBuf, limit: Option<u64>, cancel: Arc<AtomicBool>) {
+    let state = app.state::<AppState>();
+    let mut opts = ingest::Options::edsm(&dir);
+    opts.limit = limit;
+    let built = ingest::build(
+        &opts,
+        &mut |p| {
+            if let Ok(mut job) = state.build.lock() {
+                if let Some(job) = job.as_mut() {
+                    job.last = Some(p.clone());
+                }
+            }
+            let _ = app.emit("build-progress", p);
+        },
+        cancel.clone(),
+    );
+
+    let result = match state.data.write() {
+        Ok(mut slot) => {
+            let result = built.and_then(|built| {
+                // Windows won't replace open files: let go of the database first.
+                if slot.dir == dir {
+                    slot.dataset = None;
+                }
+                built.install()
+            });
+            // Reopen whatever is there now: the new build, or the old one if this failed.
+            let (next_dir, origin) = match (&result, slot.origin) {
+                (Ok(_), DirOrigin::Environment) => (dir.clone(), DirOrigin::Environment),
+                (Ok(_), _) => (dir.clone(), DirOrigin::Settings),
+                (Err(_), origin) => (slot.dir.clone(), origin),
+            };
+            *slot = DataSlot::load(next_dir, origin);
+            if result.is_ok() && origin == DirOrigin::Settings {
+                if let Ok(mut settings) = state.settings.lock() {
+                    settings.data_dir = Some(dir.clone());
+                    if let Err(e) = save_settings(&state, &settings) {
+                        eprintln!("{e}");
+                    }
+                }
+            }
+            result
+        }
+        Err(_) => Err(anyhow::anyhow!("internal error: data lock poisoned")),
+    };
+
+    let cancelled = cancel.load(Ordering::Relaxed);
+    let done = match result {
+        Ok(stats) => BuildDone {
+            ok: true,
+            cancelled: false,
+            error: None,
+            systems: Some(stats.systems_stored),
+            seconds: Some(stats.seconds_total),
+        },
+        Err(e) => {
+            if !cancelled {
+                eprintln!("catalogue build failed: {e:#}");
+            }
+            BuildDone { ok: false, cancelled, error: (!cancelled).then(|| format!("{e:#}")), systems: None, seconds: None }
+        }
+    };
+    if let Ok(mut job) = state.build.lock() {
+        *job = None;
+    }
+    let _ = app.emit("build-done", done);
+}
+
+// --- Data scheme and journal watcher -----------------------------------------
 
 /// Maps a request path onto a file inside the data dir, refusing anything
 /// that would climb out of it.
@@ -253,13 +524,15 @@ fn serve(data_dir: Option<&Path>, path: &str) -> Response<Vec<u8>> {
 /// Polls the journal once a second and forwards new jumps to the web view.
 /// Polling rather than file-change notifications: the game keeps the journal
 /// open and Windows doesn't reliably report its writes.
-fn spawn_journal_watcher(app: tauri::AppHandle) {
+fn spawn_journal_watcher(app: AppHandle) {
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(1));
         let state = app.state::<AppState>();
-        let Some(source) = &state.commander else { return };
-        let new = match source.lock() {
-            Ok(mut s) => s.poll(),
+        let new = match state.commander.lock() {
+            Ok(mut source) => match source.as_mut() {
+                Some(s) => s.poll(),
+                None => continue,
+            },
             Err(_) => return,
         };
         match new {
@@ -275,34 +548,47 @@ fn spawn_journal_watcher(app: tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let data_dir = find_data_dir();
-    let db = data_dir.as_ref().and_then(|d| {
-        Connection::open_with_flags(
-            d.join("galaxy.sqlite"),
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .map_err(|e| eprintln!("galaxy.sqlite unavailable: {e}"))
-        .ok()
-        .map(Mutex::new)
-    });
-    let commander = galaxy_core::journal::default_journal_dir()
-        .filter(|d| d.is_dir())
-        .map(|d| Mutex::new(JournalSource::new(d)));
-    eprintln!(
-        "data dir: {}",
-        data_dir.as_ref().map_or("not found".into(), |d| d.display().to_string())
-    );
-
-    let protocol_dir = data_dir.clone();
     tauri::Builder::default()
-        .manage(AppState { data_dir, db, commander })
-        .register_asynchronous_uri_scheme_protocol(SCHEME, move |_ctx, request, responder| {
-            let dir = protocol_dir.clone();
+        .plugin(tauri_plugin_dialog::init())
+        .register_asynchronous_uri_scheme_protocol(SCHEME, |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
             let path = request.uri().path().to_string();
-            std::thread::spawn(move || responder.respond(serve(dir.as_deref(), &path)));
+            std::thread::spawn(move || {
+                let state = app.state::<AppState>();
+                let dir = state.data.read().ok().filter(|s| s.dataset.is_some()).map(|s| s.dir.clone());
+                responder.respond(serve(dir.as_deref(), &path));
+            });
         })
-        .invoke_handler(tauri::generate_handler![dataset_info, search_systems, get_system, commander_history, visited_systems])
+        .invoke_handler(tauri::generate_handler![
+            dataset_info,
+            search_systems,
+            get_system,
+            commander_history,
+            visited_systems,
+            get_settings,
+            save_view_settings,
+            use_data_dir,
+            set_journal_dir,
+            pick_folder,
+            start_build,
+            cancel_build,
+            build_status,
+        ])
         .setup(|app| {
+            let paths = app.path();
+            let settings_path = paths.app_config_dir()?.join("settings.json");
+            let default_data_dir = paths.app_local_data_dir()?.join("data");
+            let settings = Settings::load(&settings_path);
+            let (dir, origin) = data::resolve_data_dir(&settings, &default_data_dir);
+            eprintln!("data dir: {} ({origin:?})", dir.display());
+            let commander = journal_dir(&settings).and_then(open_commander);
+            app.manage(AppState {
+                settings_path,
+                data: RwLock::new(DataSlot::load(dir, origin)),
+                settings: Mutex::new(settings),
+                commander: Mutex::new(commander),
+                build: Mutex::new(None),
+            });
             spawn_journal_watcher(app.handle().clone());
             Ok(())
         })

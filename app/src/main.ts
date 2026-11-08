@@ -1,74 +1,116 @@
 import * as THREE from "three";
 import {
+  buildStatus,
   commanderHistory,
   datasetInfo,
+  getSettings,
   getSystem,
   onCommanderJump,
+  saveViewSettings,
   visitedSystems,
   type CommanderPayload,
+  type DataStatus,
   type Jump,
   type SystemInfo,
+  type ViewSettings,
 } from "./api";
 import { CommanderLayer, SelectionMarker } from "./renderer/commander";
 import { SGR_A, SOL, edToWorld, worldToEd } from "./renderer/coords";
 import { GalaxyGlow } from "./renderer/glow";
 import { PointCloud } from "./renderer/pointcloud";
 import { View } from "./renderer/view";
+import { CatalogueUi } from "./ui/catalogue";
 import { Hud } from "./ui/hud";
 import { showSystem } from "./ui/info";
 import { setupSearch } from "./ui/search";
+import { SettingsPanel } from "./ui/settings";
+import { Toasts, errorText } from "./ui/toast";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 const view = new View($("viewport"));
 const hud = new Hud($("hud"));
+const toasts = new Toasts($("toasts"));
+const catalogue = new CatalogueUi(toasts);
 const infoPanel = $("info-panel");
 const commander = new CommanderLayer();
 const selection = new SelectionMarker();
-view.scene.add(commander.object, selection.object);
+view.overlay.add(commander.object, selection.object);
 
 let cloud: PointCloud | null = null;
 let glow: GalaxyGlow | null = null;
 let commanders: CommanderPayload | null = null;
 let selectedFid: string | null = null;
 let visitedCache: { total: number; approximate: number } | null = null;
+let viewSettings: ViewSettings = { pointBudget: 5_000_000, exposure: 1, glow: true, stars: true, route: true };
+let reportedTileFailures = 0;
+
+const settingsPanel = new SettingsPanel({
+  toasts,
+  view: () => viewSettings,
+  onView: (v) => applyView(v),
+  onRebuild: () => catalogue.rebuild(),
+  buildRunning: () => catalogue.running(),
+});
+const openSettings = { label: "Settings", run: () => void settingsPanel.open() };
 
 const showGalaxy = () => view.lookAt(edToWorld(SGR_A), 95_000, new THREE.Vector3(0, 0.8, 0.6));
 const showSol = () => view.flyTo(edToWorld(SOL), 120);
+
+// --- View settings -----------------------------------------------------------
+
+let saveTimer = 0;
+
+/** Applies display preferences to the scene and (debounced) saves them. */
+function applyView(next: ViewSettings, persist = true): void {
+  viewSettings = next;
+  view.exposure = next.exposure;
+  if (cloud) {
+    cloud.pointBudget = next.pointBudget;
+    cloud.object.visible = next.stars;
+  }
+  if (glow) glow.mesh.visible = next.glow;
+  commander.object.visible = next.route;
+  $<HTMLInputElement>("layer-glow").checked = next.glow;
+  $<HTMLInputElement>("layer-stars").checked = next.stars;
+  $<HTMLInputElement>("layer-route").checked = next.route;
+  view.wake();
+  if (!persist) return;
+  window.clearTimeout(saveTimer);
+  saveTimer = window.setTimeout(() => {
+    saveViewSettings(viewSettings).catch((e) => toasts.error(`Couldn't save settings: ${errorText(e)}`));
+  }, 400);
+}
+
+// --- Galaxy ------------------------------------------------------------------
 
 function select(system: SystemInfo, fly: boolean): void {
   const pos = edToWorld(system.pos);
   selection.set(pos);
   showSystem(infoPanel, system, commander.current()?.pos);
   if (fly) view.flyTo(pos, 60);
+  view.wake();
 }
 
-function showNotice(html: string): void {
-  const notice = $("notice");
-  notice.innerHTML = html;
-  notice.hidden = false;
-}
-
-async function loadGalaxy(): Promise<void> {
-  const info = await datasetInfo();
-  if (!info) {
-    showNotice(
-      "No galaxy data found.<br>Build it from the EDSM dump with<br>" +
-        "<code>cargo run --release -p ingest -- --out data</code><br>from the repository root, then restart.",
-    );
-    return;
-  }
-  console.info(`galaxy data: ${info.systems} systems from ${info.source} (${info.sourceLastModified})`);
+async function loadGalaxy(status: Extract<DataStatus, { state: "ready" }>): Promise<void> {
+  console.info(`galaxy data: ${status.systems} systems from ${status.source} (${status.sourceLastModified}) in ${status.dir}`);
   const [c, g] = await Promise.allSettled([PointCloud.load(), GalaxyGlow.load()]);
   if (c.status === "fulfilled") {
     cloud = c.value;
     view.scene.add(cloud.object);
-  } else console.error("point cloud:", c.reason);
+  } else {
+    toasts.error(`Couldn't load the star tiles: ${errorText(c.reason)}`, { action: openSettings });
+  }
   if (g.status === "fulfilled") {
     glow = g.value;
     view.scene.add(glow.mesh);
-  } else console.error("galaxy glow:", g.reason);
+  } else {
+    toasts.error(`Couldn't load the galaxy backdrop: ${errorText(g.reason)}`, { action: openSettings });
+  }
+  applyView(viewSettings, false);
 }
+
+// --- Commander ---------------------------------------------------------------
 
 function setCommander(fid: string): void {
   const track = commanders?.commanders.find((c) => c.fid === fid);
@@ -76,6 +118,7 @@ function setCommander(fid: string): void {
   selectedFid = fid;
   commander.setTrack(track);
   updateLocation();
+  view.wake();
 }
 
 function updateLocation(): void {
@@ -104,81 +147,183 @@ async function loadVisitedCache(): Promise<void> {
   visitedCache = { total: systems.length, approximate: systems.filter((s) => s.approximate).length };
   commander.setVisitedCache(systems);
   updateLocation();
+  view.wake();
+}
+
+function addCommanderOption(fid: string, name: string, jumps: number): void {
+  const opt = document.createElement("option");
+  opt.value = fid;
+  opt.textContent = `CMDR ${name || fid} (${jumps} jumps)`;
+  $<HTMLSelectElement>("commander-select").append(opt);
 }
 
 async function loadCommander(): Promise<void> {
   commanders = await commanderHistory();
-  if (!commanders || commanders.commanders.length === 0) return;
-  const select = $<HTMLSelectElement>("commander-select");
-  for (const c of commanders.commanders) {
-    const opt = document.createElement("option");
-    opt.value = c.fid;
-    opt.textContent = `CMDR ${c.name || c.fid} (${c.jumps.length} jumps)`;
-    select.append(opt);
+  const panel = $("commander");
+  const picker = $<HTMLSelectElement>("commander-select");
+  const location = $("commander-location");
+  panel.hidden = false;
+
+  if (!commanders.found) {
+    picker.hidden = true;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "Set folder…";
+    button.addEventListener("click", () => void settingsPanel.open());
+    const msg = document.createElement("div");
+    msg.className = "problem";
+    msg.textContent = "Journal folder not found, so there's no travel history.";
+    location.replaceChildren(msg, button);
+    return;
   }
-  select.value = commanders.latestFid ?? commanders.commanders[0].fid;
-  select.addEventListener("change", () => setCommander(select.value));
-  setCommander(select.value);
-  $("commander").hidden = false;
-  $("go-cmdr").hidden = false;
+
+  if (commanders.commanders.length === 0) {
+    picker.hidden = true;
+    location.textContent = "No jumps in the journals yet.";
+  } else {
+    for (const c of commanders.commanders) addCommanderOption(c.fid, c.name, c.jumps.length);
+    picker.value = commanders.latestFid ?? commanders.commanders[0].fid;
+    picker.addEventListener("change", () => setCommander(picker.value));
+    setCommander(picker.value);
+    $("go-cmdr").hidden = false;
+  }
 
   await onCommanderJump((fid: string, jump: Jump) => {
-    const track = commanders?.commanders.find((c) => c.fid === fid);
-    if (track) track.jumps.push(jump);
+    let track = commanders?.commanders.find((c) => c.fid === fid);
+    if (!track) {
+      // First jump of a commander the journals hadn't seen yet.
+      track = { fid, name: "", jumps: [] };
+      commanders?.commanders.push(track);
+      addCommanderOption(fid, "", 0);
+      picker.hidden = false;
+      $("go-cmdr").hidden = false;
+      if (!selectedFid) {
+        picker.value = fid;
+        selectedFid = fid;
+      }
+    }
+    track.jumps.push(jump);
     if (fid === selectedFid) {
       commander.addJump(jump);
       updateLocation();
+      view.wake();
     }
   });
 }
 
-// --- UI wiring -------------------------------------------------------------
+// --- UI wiring ---------------------------------------------------------------
 
-setupSearch($("search"), $("search-results"), (s) => select(s, true));
+setupSearch(
+  $("search"),
+  $("search-results"),
+  (s) => select(s, true),
+  (e) => toasts.error(`Search failed: ${errorText(e)}`, { timeout: 8 }),
+);
 $("go-sol").addEventListener("click", showSol);
 $("go-galaxy").addEventListener("click", () => view.flyTo(edToWorld(SGR_A), 95_000, 2));
 $("go-cmdr").addEventListener("click", () => {
   const cur = commander.current();
   if (cur) view.flyTo(edToWorld(cur.pos), 80);
 });
-$<HTMLInputElement>("layer-glow").addEventListener("change", (e) => {
-  if (glow) glow.mesh.visible = (e.target as HTMLInputElement).checked;
-});
-$<HTMLInputElement>("layer-stars").addEventListener("change", (e) => {
-  if (cloud) cloud.object.visible = (e.target as HTMLInputElement).checked;
-});
-$<HTMLInputElement>("layer-route").addEventListener("change", (e) => {
-  commander.object.visible = (e.target as HTMLInputElement).checked;
-});
-$<HTMLSelectElement>("budget").addEventListener("change", (e) => {
-  if (cloud) cloud.pointBudget = Number((e.target as HTMLSelectElement).value);
-});
+$("open-settings").addEventListener("click", () => void settingsPanel.open());
+for (const layer of ["glow", "stars", "route"] as const) {
+  $<HTMLInputElement>(`layer-${layer}`).addEventListener("change", (e) =>
+    applyView({ ...viewSettings, [layer]: (e.target as HTMLInputElement).checked }),
+  );
+}
 
-// Click (not drag) on a star to identify it.
+// Click (not drag) on a star to identify it; hover to see its name.
 const canvas = view.renderer.domElement;
+const hoverLabel = $("hover-label");
 let down: { x: number; y: number } | null = null;
+let hoverAt: { x: number; y: number } | null = null;
+let hoverTimer = 0;
+let hoverRowid = -1;
+
+const canvasPoint = (e: PointerEvent) => {
+  const rect = canvas.getBoundingClientRect();
+  return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+};
+
+function hideHover(): void {
+  hoverRowid = -1;
+  hoverLabel.hidden = true;
+  canvas.style.cursor = "";
+}
+
+function hover(): void {
+  hoverTimer = 0;
+  if (!hoverAt || !cloud) return;
+  const { x, y } = hoverAt;
+  const hit = cloud.pick(view.renderer, view.camera, x, y, 5);
+  if (!hit) return hideHover();
+  canvas.style.cursor = "pointer";
+  hoverLabel.style.left = `${x}px`;
+  hoverLabel.style.top = `${y}px`;
+  if (hit.rowid === hoverRowid) return;
+  const rowid = (hoverRowid = hit.rowid);
+  void getSystem(rowid).then((system) => {
+    if (rowid !== hoverRowid || !system) return;
+    hoverLabel.textContent = system.name;
+    hoverLabel.hidden = false;
+  });
+}
+
+canvas.addEventListener("pointermove", (e) => {
+  if (e.buttons !== 0) return hideHover();
+  hoverAt = canvasPoint(e);
+  // Each pick renders the visible points once, so don't do it every event.
+  if (!hoverTimer) hoverTimer = window.setTimeout(hover, 80);
+});
+canvas.addEventListener("pointerleave", () => {
+  hoverAt = null;
+  hideHover();
+});
 canvas.addEventListener("pointerdown", (e) => {
+  hideHover();
   down = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
 });
 canvas.addEventListener("pointerup", async (e) => {
   if (!down || !cloud || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return;
-  const rect = canvas.getBoundingClientRect();
-  const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+  const { x, y } = canvasPoint(e);
   const t0 = performance.now();
-  const hit = cloud.pick(view.camera, ndc, view.height);
+  const hit = cloud.pick(view.renderer, view.camera, x, y);
   console.debug(`pick took ${(performance.now() - t0).toFixed(1)} ms`);
   if (!hit) return;
-  const system = await getSystem(hit.rowid);
+  const system = await getSystem(hit.rowid).catch((err) => {
+    toasts.error(`Couldn't look up that system: ${errorText(err)}`, { timeout: 8 });
+    return null;
+  });
   if (system) select(system, false);
 });
 
+canvas.addEventListener("webglcontextlost", (e) => {
+  e.preventDefault();
+  toasts.error("The graphics driver reset and the map stopped drawing.", {
+    action: { label: "Reload", run: () => location.reload() },
+  });
+});
+
 view.onFrame((now, dt) => {
-  if (cloud && cloud.object.visible) cloud.update(view.camera, view.height, view.pixelRatio);
+  if (cloud && cloud.object.visible) {
+    cloud.update(view.camera, view.height, view.pixelRatio);
+    if (cloud.busy) view.wake();
+  }
   commander.update(now);
+  const stats = cloud?.stats() ?? null;
+  if (stats && stats.failed > reportedTileFailures) {
+    if (reportedTileFailures === 0) {
+      toasts.error("Some star tiles couldn't be loaded, so parts of the map are missing. The data folder may be damaged.", {
+        action: openSettings,
+      });
+    }
+    reportedTileFailures = stats.failed;
+  }
   hud.update(
     now,
     dt,
-    cloud?.stats() ?? null,
+    view.idle,
+    stats,
     cloud?.totalPoints ?? 0,
     worldToEd(view.controls.target),
     view.camera.position.distanceTo(view.controls.target),
@@ -191,6 +336,8 @@ if (import.meta.env.DEV) {
     sc: {
       view,
       commander,
+      catalogue,
+      settingsPanel,
       get cloud() {
         return cloud;
       },
@@ -203,9 +350,34 @@ if (import.meta.env.DEV) {
   });
 }
 
+async function boot(): Promise<void> {
+  try {
+    viewSettings = (await getSettings()).view;
+  } catch (e) {
+    toasts.error(`Couldn't read the settings: ${errorText(e)}`);
+  }
+  applyView(viewSettings, false);
+  if (!view.hdr) console.warn("No half-float render targets: dense regions will clip instead of tone mapping.");
+
+  const [status, build] = await Promise.all([datasetInfo(), buildStatus()]);
+  if (status.state === "ready") {
+    void loadGalaxy(status);
+    if (build) catalogue.resume(build, true);
+  } else if (build) {
+    catalogue.resume(build, false);
+  } else {
+    catalogue.showSetup(status);
+  }
+
+  try {
+    await loadCommander();
+    await loadVisitedCache();
+  } catch (e) {
+    console.error("commander data:", e);
+    toasts.error(`Couldn't read the commander data: ${errorText(e)}`);
+  }
+}
+
 showGalaxy();
 view.start();
-void loadGalaxy();
-void loadCommander()
-  .then(loadVisitedCache)
-  .catch((e) => console.error("commander data:", e));
+void boot();
