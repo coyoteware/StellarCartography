@@ -171,11 +171,12 @@ fn build_poi(args: Args) -> Result<()> {
     )?;
     let counts: Vec<String> = stats.by_category.iter().map(|(k, v)| format!("{k} {v}")).collect();
     eprintln!(
-        "done in {:.0}s: {} points of interest ({}), {} malformed; {} downloaded, {} written",
+        "done in {:.0}s: {} points of interest ({}), {} malformed, {} codex launch credits dropped; {} downloaded, {} written",
         stats.seconds,
         stats.pois,
         counts.join(", "),
         stats.malformed,
+        stats.launch_credits,
         human_bytes(stats.bytes_downloaded),
         human_bytes(stats.file_bytes)
     );

@@ -17,12 +17,12 @@ import {
 import { CATEGORIES, categoryInfo, glyph, loadPoi, poisInSystem, searchPoi, type Poi, type PoiData } from "../poi";
 import { distance } from "../renderer/coords";
 import { PoiLayer } from "../renderer/poi";
+import { button, h, type Child } from "./dom";
+import { DOWNLOAD_SIZES, DownloadJob } from "./download";
 import { errorText, type Toasts } from "./toast";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
-/** Shown before a download: the four files' size as of November 2026, almost all of it the codex reports. */
-export const POI_DOWNLOAD_SIZE = "about 900 MB";
 /** Rows drawn at once; the filter narrows the rest. */
 const MAX_ROWS = 200;
 
@@ -32,22 +32,6 @@ const PHASE_NAMES: Record<PoiProgress["phase"], string> = {
   carriers: "fleet carriers",
   codex: "codex reports",
 };
-
-type Child = Node | string | null | undefined | false;
-
-function h<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, ...children: Child[]): HTMLElementTagNameMap[K] {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  for (const c of children) if (c) e.append(c);
-  return e;
-}
-
-function button(text: string, onClick: () => void, cls?: string): HTMLButtonElement {
-  const b = h("button", cls, text);
-  b.type = "button";
-  b.addEventListener("click", onClick);
-  return b;
-}
 
 const mb = (bytes: number) => `${Math.round(bytes / 1e6).toLocaleString()} MB`;
 const ly = (d: number) => `${d < 10 ? d.toFixed(1) : Math.round(d).toLocaleString()} ly`;
@@ -79,8 +63,11 @@ export class PlacesUi {
   private data: PoiData | null = null;
   private state: DataState = "idle";
   private error = "";
-  private progress: PoiProgress | null = null;
-  private updating = false;
+  private readonly job: DownloadJob<PoiProgress, PoiDone>;
+  /** Kept across reloads, so the marker stays lit when an update swaps the layer. */
+  private selectedId: string | null = null;
+  /** Bumped by each load: a slower, older load mustn't install its layer last. */
+  private loads = 0;
   private readonly panel = $("places-panel");
   private readonly body = h("div", "places-body");
   private readonly toggle = button("", () => this.setOpen(!this.open), "places-toggle");
@@ -91,10 +78,6 @@ export class PlacesUi {
   private readonly list = h("ul", "poi-list");
   private readonly more = h("div", "muted small");
   private readonly status = h("div", "poi-status");
-  private readonly progressLine = h("div", "small");
-  private readonly progressFill = h("div");
-  private readonly progressCancel: HTMLButtonElement;
-  private readonly progressEl: HTMLElement;
   private readonly footer = h("div", "muted small source");
   private filterTimer = 0;
   /** The settings the layer and list were last brought in line with. */
@@ -123,11 +106,19 @@ export class PlacesUi {
       } else this.setOpen(false);
     });
 
-    this.progressCancel = button("Cancel", () => {
-      this.progressCancel.disabled = true;
-      void cancelPoiUpdate();
+    this.job = new DownloadJob<PoiProgress, PoiDone>({
+      start: startPoiUpdate,
+      cancel: cancelPoiUpdate,
+      status: poiUpdateStatus,
+      onProgressEvent: onPoiProgress,
+      onDoneEvent: onPoiDone,
+      describe: progressText,
+      fraction: (p) => (p?.bytesTotal ? p.bytesRead / p.bytesTotal : null),
+      onRunningChange: () => this.render(),
+      onProgress: () => this.onStatus(),
+      onDone: (d) => void this.done(d),
+      onStartError: (e) => this.deps.toasts.error(`Couldn't start the download: ${errorText(e)}`),
     });
-    this.progressEl = h("div", "overlay-progress", this.progressLine, h("div", "meter", this.progressFill), this.progressCancel);
 
     this.toggle.setAttribute("aria-expanded", "false");
     this.toggle.title = "Points of interest: Guardian and Thargoid sites, carrier hubs, megaships, nebulae, sights";
@@ -135,15 +126,6 @@ export class PlacesUi {
     this.body.append(this.status, this.filter, this.chips, this.list, this.more, this.footer);
     this.body.hidden = true;
     this.panel.append(this.toggle, this.body);
-
-    void onPoiProgress((p) => {
-      const started = !this.updating;
-      this.updating = true;
-      this.progress = p;
-      if (started) this.render();
-      else this.renderProgress();
-    });
-    void onPoiDone((d) => void this.done(d));
   }
 
   get points(): PoiData | null {
@@ -151,7 +133,7 @@ export class PlacesUi {
   }
 
   get running(): boolean {
-    return this.updating;
+    return this.job.running;
   }
 
   setOpen(open: boolean): void {
@@ -167,20 +149,22 @@ export class PlacesUi {
 
   /** Loads poi.json (again, after an update) and picks up a download already running. */
   async load(): Promise<void> {
+    const mine = ++this.loads;
     this.state = "loading";
     this.render();
     try {
-      const status = await poiUpdateStatus().catch(() => null);
-      if (status) {
-        this.updating = true;
-        this.progress = status.progress;
-      }
+      await this.job.resume();
       const data = await loadPoi();
+      if (mine !== this.loads) return;
       this.layer?.dispose();
       this.data = data;
       this.layer = data && new PoiLayer(data.pois, $("poi-labels"));
       this.state = data ? "ready" : "missing";
+      // The new layer starts with nothing lit: light the place still selected.
+      const selected = this.selectedId && data?.pois.find((p) => p.id === this.selectedId);
+      this.highlight(selected || null);
     } catch (e) {
+      if (mine !== this.loads) return;
       console.error("points of interest:", e);
       this.layer?.dispose();
       this.data = this.layer = null;
@@ -217,12 +201,13 @@ export class PlacesUi {
 
   /** Lights `poi`'s marker; null clears it. */
   highlight(poi: Poi | null): void {
+    this.selectedId = poi?.id ?? null;
     this.layer?.setSelected(poi ? this.layer.indexOf(poi) : null);
   }
 
   /** One line for the settings panel. */
   statusText(): string {
-    if (this.updating) return this.progressText();
+    if (this.job.running) return this.job.text();
     switch (this.state) {
       case "ready": {
         const d = this.data!;
@@ -238,22 +223,11 @@ export class PlacesUi {
     }
   }
 
-  async startUpdate(): Promise<void> {
-    if (this.updating) return;
-    try {
-      await startPoiUpdate();
-      this.updating = true;
-      this.progress = null;
-      this.progressCancel.disabled = false;
-      this.render();
-    } catch (e) {
-      this.deps.toasts.error(`Couldn't start the download: ${errorText(e)}`);
-    }
+  startUpdate(): Promise<void> {
+    return this.job.start();
   }
 
   private async done(d: PoiDone): Promise<void> {
-    this.updating = false;
-    this.progress = null;
     if (d.ok) {
       const minutes = d.seconds ? ` in ${Math.max(1, Math.round(d.seconds / 60))} min` : "";
       this.deps.toasts.show(`Points of interest updated: ${(d.pois ?? 0).toLocaleString()} places${minutes}.`);
@@ -283,9 +257,9 @@ export class PlacesUi {
     this.onStatus();
     const ready = this.state === "ready" && !!this.data;
     const parts: Child[] = [];
-    if (this.updating) parts.push(this.progressBlock());
+    if (this.job.running) parts.push(this.job.block());
     if (this.state === "loading" || this.state === "idle") parts.push(h("div", "muted small", "Loading points of interest…"));
-    else if (this.state === "missing" && !this.updating) parts.push(this.downloadPrompt());
+    else if (this.state === "missing" && !this.job.running) parts.push(this.downloadPrompt());
     else if (this.state === "error") parts.push(this.errorBlock());
     this.status.replaceChildren(...parts.filter((p): p is Node | string => !!p));
     this.status.hidden = parts.length === 0;
@@ -347,25 +321,6 @@ export class PlacesUi {
     return h("li", undefined, b);
   }
 
-  private progressText(): string {
-    const p = this.progress;
-    if (!p) return "Connecting to EDAstro…";
-    const of = p.bytesTotal ? `${mb(p.bytesRead)} of ${mb(p.bytesTotal)}` : mb(p.bytesRead);
-    return `Downloading ${PHASE_NAMES[p.phase]} (${p.step} of ${p.steps}): ${of}`;
-  }
-
-  private progressBlock(): HTMLElement {
-    this.renderProgress();
-    return this.progressEl;
-  }
-
-  private renderProgress(): void {
-    const p = this.progress;
-    this.progressLine.textContent = this.progressText();
-    this.progressFill.style.width = p?.bytesTotal ? `${Math.min(100, (p.bytesRead / p.bytesTotal) * 100).toFixed(1)}%` : "0%";
-    this.onStatus();
-  }
-
   private downloadPrompt(): HTMLElement {
     return h(
       "div",
@@ -373,7 +328,7 @@ export class PlacesUi {
       h(
         "p",
         "small",
-        `Guardian and Thargoid sites, carrier hubs, megaships, nebulae and sights come from EDAstro's catalogues: ${POI_DOWNLOAD_SIZE} to download (not kept), a few minutes. The map stays usable meanwhile.`,
+        `Guardian and Thargoid sites, carrier hubs, megaships, nebulae and sights come from EDAstro's catalogues: ${DOWNLOAD_SIZES.poi} to download (not kept), a few minutes. The map stays usable meanwhile.`,
       ),
       button("Download", () => void this.startUpdate(), "primary"),
     );
@@ -387,4 +342,10 @@ export class PlacesUi {
       button("Download again", () => void this.startUpdate()),
     );
   }
+}
+
+function progressText(p: PoiProgress | null): string {
+  if (!p) return "Connecting to EDAstro…";
+  const of = p.bytesTotal ? `${mb(p.bytesRead)} of ${mb(p.bytesTotal)}` : mb(p.bytesRead);
+  return `Downloading ${PHASE_NAMES[p.phase]} (${p.step} of ${p.steps}): ${of}`;
 }

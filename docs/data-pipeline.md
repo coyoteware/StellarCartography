@@ -149,7 +149,9 @@ Little-endian:
 - The file is written as `populated.bin.partial` and renamed into place when complete. The update first checks for room for a second copy.
 - The web view maps each column straight onto a typed array, without decoding ([`populated-data.ts`](../app/src/renderer/populated-data.ts)).
 - Catalogue rebuilds never touch this file.
-- When the data folder changes (Settings → "Use another folder…", or a build into a new folder), the file is copied into the new folder if that has none, so the layers come along. `poi.json` is carried the same way.
+- When the data folder changes (Settings → "Use another folder…", or a build into a new folder), the file is copied into the new folder unless that already has a newer copy, so the newest layers come along. The copy keeps the original's modification time, so going back doesn't copy it again.
+- A download that finishes after the folder changed (it keeps writing where it started) is copied into the current folder too. That copy happens under the same lock as the change of folder, so whichever comes second sees the other's result.
+- `poi.json` is carried the same way.
 
 | Figure | Value |
 | --- | --- |
@@ -175,7 +177,7 @@ Four files that EDAstro publishes, read in this order:
 | `gec/json/all`: the Galactic Exploration Catalog | 2.2 MB of JSON | all 658 entries, with summaries and links |
 | `mapcharts/files/edsmPOI.csv`: EDSM's Galactic Mapping Project | 1.3 MB | 8,398 rows of the types below |
 | `mapcharts/files/fleetcarriers.csv`: every known fleet carrier | 21 MB, 92k carriers | 199 carrier hubs |
-| `mapcharts/files/codex-data.csv`: every codex entry players have reported, per system | 875 MB, 5.0M rows | 394 Guardian and 419 Thargoid systems |
+| `mapcharts/files/codex-data.csv`: every codex entry players have reported, per system | 875 MB, 5.0M rows | 383 Guardian and 398 Thargoid systems |
 
 Why these:
 - **Guardian and Thargoid sites:** the codex reports are the only full record. EDSM's own Guardian entries are unnamed points on a 10 ly grid, and the GEC names only 17 Guardian sites.
@@ -186,6 +188,8 @@ Why these:
 ### Processing
 
 - **Download:** each file is streamed with the same resumable reader as the dumps. Nothing raw is kept.
+  - The GEC is read whole. It's capped at 64 MB, so a wrong Content-Length or an unexpected body fails the update instead of making the app reserve the memory.
+  - The CSVs are read row by row.
 - **Codex filter:** the codex reports are read row by row. Only rows whose Codex ID starts with `codex_ent_guardian_`, `codex_ent_thargoid_` or `codex_ent_tg_` are decoded.
 - **Categories:** every entry gets one of ten categories and a readable kind, from the mapping tables in `poi.rs`.
   - Types the tables don't know are filed under sights & history and counted in the build log.
@@ -198,11 +202,16 @@ Why these:
   - DSSA carriers that aren't deployed;
   - its older copy of the GEC.
 - **Codex grouping:** one place per system and category. The strongest entry names the site:
-  - Guardian: Structure, then Ruins, then Beacon;
-  - Thargoid: Structure, then Spire site, then Barnacle site, then surface site.
+  - Guardian: Structure, then Ruins, then Beacon, else "Guardian site";
+  - Thargoid: Structure, then Spire site, then Barnacle site, else "Thargoid site".
 
   The summary lists every entry reported there. Names come from the Codex ID, because the file's own entry names are in whatever language each reporter's game used.
-- **Carrier hubs:** a hub is a system with 10 or more carriers seen in the 30 days up to the newest sighting in the file. Bigger hubs get bigger markers.
+- **Which codex reports count:** entries are credited to the system the commander was in, and in the codex's first weeks (11 December 2018 to the end of January 2019) that wasn't always where the thing is. Shinrarta Dezhra got Guardian and Thargoid entries that way, and Meene a Guardian Beacon. So:
+  - **Sites themselves** (ruins, structures, beacons, spires, barnacles) count whenever they were reported.
+  - **Things found at sites** (data logs, terminals, pylons, sentinels, barnacle barbs, Thargoid pods and devices) make a place on their own only if one was reported after that window. This keeps 128 Guardian and 124 Thargoid sites known only from such finds, all in Guardian or Pleiades space.
+  - **A site known only from reports in that window** needs another site of its kind within 100 ly that's known from other reports. Real sites reported then sit within 45 ly of others; Meene's nearest Guardian site is 240 ly away.
+  - Together these drop 32 places from the November 2026 data. Reports without a date (most ruins and structures) count as outside the window.
+- **Carrier hubs:** a hub is a system with 10 or more carriers seen in the 30 days up to the newest sighting in the file. Sightings dated more than a day ahead of the clock are skipped, so a bad clock can't move that window. Bigger hubs get bigger markers.
 - **Summaries:** cut to about 300 characters.
 
 ### Storage: `poi.json`
@@ -219,7 +228,7 @@ Why these:
 
 | Figure | Value |
 | --- | --- |
-| Places | 10,049 (5,870 of them planetary nebulae, hidden by default) |
+| Places | 10,017 (5,870 of them planetary nebulae, hidden by default) |
 | File size | 2.2 MB |
 | Downloaded | 858 MB, 96% of it codex reports |
 | Time | 61 s, nearly all of it the download |

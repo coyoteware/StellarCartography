@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
-use galaxy_core::details::{iso_from_unix, unix_from_iso};
+use galaxy_core::details::{iso_from_unix, normalize_time, unix_from_iso};
 use serde::{Deserialize, Serialize};
 
 use crate::{source, space};
@@ -39,8 +39,14 @@ const EDASTRO: &str = "https://edastro.com";
 pub const CARRIER_WINDOW_DAYS: i64 = 30;
 /// Carriers a system needs (within the window) to be listed as a hub.
 pub const CARRIER_HUB_MIN: u32 = 10;
+/// Sightings dated further ahead of the clock than this are bad clocks or
+/// corrupt rows, not carriers from the future.
+const CLOCK_SLACK_SECS: i64 = 86_400;
 /// Summaries are cut to about this many characters.
 const SUMMARY_CHARS: usize = 300;
+/// The GEC is about 2 MB. A body this big isn't the catalogue, and isn't
+/// read into memory.
+const GEC_MAX_BYTES: u64 = 64 << 20;
 
 /// One of the four files, in the order they're read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -125,6 +131,11 @@ pub struct Stats {
     pub unknown_types: BTreeMap<String, u64>,
     /// Entries or rows that couldn't be read.
     pub malformed: u64,
+    /// Codex systems not made places because they could be the codex
+    /// launch's misplaced credits: only things found at sites, none reported
+    /// after the launch window, or a site reported only in that window with
+    /// no known site of its kind nearby (see `read_codex`).
+    pub launch_credits: u64,
     pub bytes_downloaded: u64,
     pub file_bytes: u64,
     pub seconds: f64,
@@ -282,8 +293,17 @@ fn edsm_type(kind: &str) -> EdsmType {
     }
 }
 
-/// A Guardian or Thargoid codex entry: its category, a readable label, and
-/// how strongly it marks a site (the strongest names the site's kind).
+/// Codex entries of this rank and up are sites themselves.
+const SITE_RANK: u8 = 2;
+const GUARDIAN_SITE: &str = "Guardian site";
+const THARGOID_SITE: &str = "Thargoid site";
+
+/// A Guardian or Thargoid codex entry: its category, a readable label, its
+/// rank, and the kind of site it shows. Ranks of `SITE_RANK` and up are
+/// sites (ruins, structures, beacons, spires, barnacles), and the highest
+/// one present names the site. Below that are things found at sites (data
+/// logs, terminals, barbs, Thargoid devices), which only mark a site under
+/// the conditions in `read_codex`.
 fn codex_entry(id: &str) -> Option<(Category, &'static str, u8, &'static str)> {
     use Category::{Guardian, Thargoid};
     let rest = id.strip_prefix("codex_ent_")?;
@@ -292,11 +312,11 @@ fn codex_entry(id: &str) -> Option<(Category, &'static str, u8, &'static str)> {
             "structure" => ("Guardian Structure", 4, "Guardian Structure"),
             "ruins" => ("Guardian Ruins", 3, "Guardian Ruins"),
             "beacons" => ("Guardian Beacon", 2, "Guardian Beacon"),
-            "terminal" => ("Guardian Data Terminal", 1, "Guardian site"),
-            "pylon" => ("Guardian Pylon", 1, "Guardian site"),
-            "sentinel" => ("Guardian Sentinel", 1, "Guardian site"),
-            "data_logs" => ("Guardian Codex", 1, "Guardian site"),
-            _ => ("Guardian artefact", 0, "Guardian site"),
+            "terminal" => ("Guardian Data Terminal", 1, GUARDIAN_SITE),
+            "pylon" => ("Guardian Pylon", 1, GUARDIAN_SITE),
+            "sentinel" => ("Guardian Sentinel", 1, GUARDIAN_SITE),
+            "data_logs" => ("Guardian Codex", 1, GUARDIAN_SITE),
+            _ => ("Guardian artefact", 1, GUARDIAN_SITE),
         };
         return Some((Guardian, label, rank, kind));
     }
@@ -309,8 +329,8 @@ fn codex_entry(id: &str) -> Option<(Category, &'static str, u8, &'static str)> {
             "large_spike" => ("Hardened Spike", 3, "Thargoid Spire site"),
             "barnacle_01" => ("Common Thargoid Barnacle", 2, "Thargoid Barnacle site"),
             "barnacle_02" => ("Large Thargoid Barnacle", 2, "Thargoid Barnacle site"),
-            "barnacle_spikes" => ("Thargoid Barnacle Barbs", 2, "Thargoid Barnacle site"),
-            _ => ("Thargoid artefact", 0, "Thargoid site"),
+            "barnacle_spikes" => ("Thargoid Barnacle Barbs", 1, THARGOID_SITE),
+            _ => ("Thargoid artefact", 1, THARGOID_SITE),
         };
         return Some((Thargoid, label, rank, kind));
     }
@@ -321,7 +341,7 @@ fn codex_entry(id: &str) -> Option<(Category, &'static str, u8, &'static str)> {
             "transmitter" => "Thargoid Device",
             _ => "Thargoid artefact",
         };
-        return Some((Thargoid, label, 1, "Thargoid surface site"));
+        return Some((Thargoid, label, 1, THARGOID_SITE));
     }
     None
 }
@@ -486,15 +506,18 @@ fn edsm_notes(notes: &str) -> Option<String> {
     summary(&parts.join("; "))
 }
 
+fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
+    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+}
+
 fn finite3(x: f64, y: f64, z: f64) -> Option<[f32; 3]> {
     (x.is_finite() && y.is_finite() && z.is_finite()).then_some([x as f32, y as f32, z as f32])
 }
 
 // --- GEC ----------------------------------------------------------------------------
 
-fn read_gec(mut input: source::Source, info: &source::SourceInfo, run: &mut Run) -> Result<()> {
-    let mut bytes = Vec::with_capacity(info.total.unwrap_or(4 << 20) as usize);
-    input.read_to_end(&mut bytes)?;
+fn read_gec(input: source::Source, info: &source::SourceInfo, run: &mut Run) -> Result<()> {
+    let bytes = read_capped(input, info.total, GEC_MAX_BYTES)?;
     let entries: Vec<serde_json::Value> = serde_json::from_slice(&bytes).context("expected a JSON array")?;
     for entry in entries {
         match gec_poi(&entry) {
@@ -508,6 +531,19 @@ fn read_gec(mut input: source::Source, info: &source::SourceInfo, run: &mut Run)
         }
     }
     Ok(())
+}
+
+/// Reads a whole body of at most `cap` bytes. `expected` (the server's
+/// Content-Length) only sizes the first allocation, and is capped as well:
+/// a bogus length mustn't make the app reserve gigabytes, and an allocation
+/// failure would end the whole process, not just the download.
+fn read_capped(input: impl Read, expected: Option<u64>, cap: u64) -> Result<Vec<u8>> {
+    let mut bytes = Vec::with_capacity(expected.unwrap_or(4 << 20).min(cap) as usize);
+    input.take(cap + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > cap {
+        bail!("larger than {} MB, which isn't the file expected", cap.div_ceil(1 << 20));
+    }
+    Ok(bytes)
 }
 
 /// One GEC entry, and whether its type was known.
@@ -636,6 +672,8 @@ fn read_carriers(input: source::Source, info: &source::SourceInfo, run: &mut Run
     let cols = Columns::new(&mut reader, &["LastUpdated", "LastSystem", "SystemAddress", "Coord_X", "Coord_Y", "Coord_Z"])?;
     // Every sighting first: the window ends at the newest one in the file.
     let mut seen: Vec<(i64, Hub)> = Vec::new();
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(i64::MAX, |d| d.as_secs() as i64);
+    let latest = now.saturating_add(CLOCK_SLACK_SECS);
     let mut row = csv::ByteRecord::new();
     while reader.read_byte_record(&mut row)? {
         run.tick(Phase::Carriers, info)?;
@@ -645,6 +683,11 @@ fn read_carriers(input: source::Source, info: &source::SourceInfo, run: &mut Run
             run.malformed();
             continue;
         };
+        // A single row from "the future" would otherwise move the window past every real sighting.
+        if when > latest {
+            run.malformed();
+            continue;
+        }
         let id64 = text(cols.get(&row, "SystemAddress")).filter(|s| s.parse::<u64>().is_ok_and(|v| v > 0));
         seen.push((when, Hub { name: system, id64, pos, region: text(cols.get(&row, "EstimatedRegion")), carriers: 0 }));
     }
@@ -694,10 +737,27 @@ struct Site {
     kind: &'static str,
     /// Entries reported here, deduplicated, in the order first seen.
     parts: Vec<&'static str>,
+    /// Some entry here is reported after the codex launch window.
+    after_launch: bool,
+    /// Every entry here is reported in the codex launch window.
+    launch_only: bool,
 }
 
 const CODEX_ID: &str = "Codex ID";
 const CODEX_ID64: &str = "System Address / ID64";
+const CODEX_REPORTED: &str = "First Reported";
+
+/// The codex arrived on 11 December 2018. In its first weeks, entries were
+/// also credited to wherever a commander happened to be rather than where
+/// the thing is: Shinrarta Dezhra got Guardian and Thargoid entries, and
+/// Meene (an engineer's system in the bubble) a Guardian Beacon. Reports
+/// first made in this window are trusted less (see `read_codex`).
+const CODEX_LAUNCH_WINDOW: (&str, &str) = ("2018-12-11T00:00:00Z", "2019-02-01T00:00:00Z");
+/// A site known only from launch-window reports must have a site of its
+/// kind within this many ly that's known from other reports. Real sites
+/// reported then cluster within 45 ly of others; Meene's nearest Guardian
+/// site is 240 ly away.
+const LAUNCH_NEIGHBOUR_LY: f32 = 100.0;
 
 fn read_codex(input: source::Source, info: &source::SourceInfo, run: &mut Run) -> Result<()> {
     let mut reader = csv_reader(input);
@@ -726,7 +786,18 @@ fn read_codex(input: source::Source, info: &source::SourceInfo, run: &mut Run) -
         let key = (category, id64.clone().unwrap_or_else(|| system.to_lowercase()));
         let site = sites.entry(key.clone()).or_insert_with(|| {
             order.push(key);
-            Site { category, name: system, id64, pos, region: text(cols.get(&row, "Region")), rank: 0, kind, parts: Vec::new() }
+            Site {
+                category,
+                name: system,
+                id64,
+                pos,
+                region: text(cols.get(&row, "Region")),
+                rank: 0,
+                kind,
+                parts: Vec::new(),
+                after_launch: false,
+                launch_only: true,
+            }
         });
         if rank > site.rank || site.parts.is_empty() {
             site.rank = rank;
@@ -735,9 +806,31 @@ fn read_codex(input: source::Source, info: &source::SourceInfo, run: &mut Run) -
         if !site.parts.contains(&label) {
             site.parts.push(label);
         }
+        // Undated reports count as neither: most site entries carry no date.
+        let reported = normalize_time(cols.get(&row, CODEX_REPORTED));
+        let (from, to) = CODEX_LAUNCH_WINDOW;
+        site.after_launch |= reported.as_deref().is_some_and(|t| t >= to);
+        site.launch_only &= reported.as_deref().is_some_and(|t| t >= from && t < to);
     }
-    for key in order {
-        let Some(site) = sites.remove(&key) else { continue };
+    // Things found at sites mark one only if reported after the launch
+    // window: a data log credited to Shinrarta Dezhra isn't a Guardian site.
+    let mut found: Vec<Site> = order.into_iter().filter_map(|key| sites.remove(&key)).collect();
+    let before = found.len();
+    found.retain(|s| s.rank >= SITE_RANK || s.after_launch);
+    // A site known only from launch-window reports needs a neighbour of its
+    // kind known otherwise: launch credits land where the commander was, so
+    // they stand alone.
+    let corroborated: Vec<bool> = found
+        .iter()
+        .map(|s| {
+            !s.launch_only
+                || found.iter().any(|o| !o.launch_only && o.category == s.category && distance(o.pos, s.pos) <= LAUNCH_NEIGHBOUR_LY)
+        })
+        .collect();
+    let mut keep = corroborated.into_iter();
+    found.retain(|_| keep.next().unwrap_or(false));
+    run.stats.launch_credits += (before - found.len()) as u64;
+    for site in found {
         let source_id = site.id64.clone().unwrap_or_else(|| site.name.to_lowercase());
         run.pois.push(Poi {
             id: format!("codex:{}:{source_id}", site.category.id()),
@@ -801,18 +894,30 @@ minorPOI,23,Broken,abc,2,3,Somewhere,
             s += &format!("O{i:03},,,\"2026-09-01 10:00:00\",,Deciat,6681123623626,122.625,-0.8125,-47.28125,135.6,Inner Orion Spur,1,1,\n");
         }
         s += "BAD,,,not a date,,Deciat,6681123623626,122.625,-0.8125,-47.28125,135.6,,1,1,\n";
+        // A bad clock: it mustn't move the window past every real sighting.
+        s += "FUT,,,\"2099-01-01 00:00:00\",,Khun,3657130755,-171.59375,19.96875,-56.96875,182.5,,1,1,\n";
         s
     }
 
+    // Real rows, apart from: the dates on HIP 20567 and on Pleiades Sector
+    // AB-W b2-4 (and its barbs), and the made-up Hyades system, which stands
+    // in for a cluster of real sites reported at launch.
     const CODEX: &str = "Codex Entry,Codex ID,First Reported,Odyssey,Region,System,X,Y,Z,Main Star Type,\"System Address / ID64\"
 ,codex_ent_fonticulus_02,,,Inner Orion Spur,10 Canum Venaticorum,-9.375,55.4375,-7,\"F (White) Star\",79196866923
-Guardian Codex,codex_ent_guardian_data_logs,,0,Outer Orion Spur,Synuefe XR-H d11-102,357.34375,-49.34375,-74.75,\"M (Red dwarf) Star\",3515254557027
+Guardian Codex,codex_ent_guardian_data_logs,\"2018-12-30 14:05:35\",0,Outer Orion Spur,Synuefe XR-H d11-102,357.34375,-49.34375,-74.75,\"M (Red dwarf) Star\",3515254557027
 Guardian Structure,codex_ent_guardian_structure,,0,Outer Orion Spur,Synuefe XR-H d11-102,357.34375,-49.34375,-74.75,\"M (Red dwarf) Star\",3515254557027
 Guardian Pylon,codex_ent_guardian_pylon,,0,Outer Orion Spur,Synuefe XR-H d11-102,357.34375,-49.34375,-74.75,\"M (Red dwarf) Star\",3515254557027
 Guardian Ruins,codex_ent_guardian_ruins,,0,Norma Expanse,Blaa Hypai EU-D c13-0,1244.25,-752.188,12307,\"K (Yellow-Orange) Star\",85932285042
-Thargoid-Raumpocken-Matrix,codex_ent_thargoid_barnacle_matrix_submerged,,1,Inner Orion Spur,HIP 20567,-17.5,-70.5,-133.25,\"K (Yellow-Orange) Star\",908619975354
-Common Thargoid Barnacle,codex_ent_thargoid_barnacle_01,,0,Inner Orion Spur,HIP 20567,-17.5,-70.5,-133.25,\"K (Yellow-Orange) Star\",908619975354
-Thargoid Pod,codex_ent_tg_pod,,0,Inner Orion Spur,Pleiades Sector AB-W b2-4,-81,-149.5,-343.375,\"M (Red dwarf) Star\",9466778822857
+Thargoid-Raumpocken-Matrix,codex_ent_thargoid_barnacle_matrix_submerged,\"2021-06-01 10:00:00\",1,Inner Orion Spur,HIP 20567,-17.5,-70.5,-133.25,\"K (Yellow-Orange) Star\",908619975354
+Common Thargoid Barnacle,codex_ent_thargoid_barnacle_01,\"2021-06-01 10:00:00\",0,Inner Orion Spur,HIP 20567,-17.5,-70.5,-133.25,\"K (Yellow-Orange) Star\",908619975354
+Common Thargoid Barnacle,codex_ent_thargoid_barnacle_01,\"2018-12-15 12:00:00\",0,Inner Orion Spur,Hyades Sector ZZ-Z a0-0,-20,-75,-150,\"M (Red dwarf) Star\",11111111
+Thargoid Pod,codex_ent_tg_pod,\"2019-04-14 10:47:29\",0,Inner Orion Spur,Pleiades Sector AB-W b2-4,-81,-149.5,-343.375,\"M (Red dwarf) Star\",9466778822857
+Thargoid Barnacle Barbs,codex_ent_thargoid_barnacle_spikes,\"2019-04-14 10:51:02\",0,Inner Orion Spur,Pleiades Sector AB-W b2-4,-81,-149.5,-343.375,\"M (Red dwarf) Star\",9466778822857
+Guardian Codex,codex_ent_guardian_data_logs,\"2019-01-06 01:49:16\",0,Inner Orion Spur,Shinrarta Dezhra,55.71875,17.59375,27.15625,\"K (Yellow-Orange) Star\",3932277478106
+Guardian Data Terminal,codex_ent_guardian_terminal,\"2019-01-06 02:11:06\",0,Inner Orion Spur,Shinrarta Dezhra,55.71875,17.59375,27.15625,\"K (Yellow-Orange) Star\",3932277478106
+Thargoid Barnacle Barbs,codex_ent_thargoid_barnacle_spikes,\"2018-12-31 22:17:28\",0,Inner Orion Spur,Shinrarta Dezhra,55.71875,17.59375,27.15625,\"K (Yellow-Orange) Star\",3932277478106
+Guardian Beacon,codex_ent_guardian_beacons,\"2019-01-05 20:22:04\",0,Inner Orion Spur,Meene,118.78125,-56.4375,-97.1875,\"K (Yellow-Orange) Star\",3107442365122
+Guardian Codex,codex_ent_guardian_data_logs,\"2018-12-30 14:05:35\",0,Inner Orion Spur,Meene,118.78125,-56.4375,-97.1875,\"K (Yellow-Orange) Star\",3107442365122
 Broken,codex_ent_guardian_ruins,,0,Somewhere,Nowhere,x,y,z,,
 ";
 
@@ -849,9 +954,11 @@ Broken,codex_ent_guardian_ruins,,0,Somewhere,Nowhere,x,y,z,,
         assert_eq!(f.sources.len(), 4);
         assert_eq!(f.pois.len() as u64, stats.pois);
         // GEC: 4 readable entries (one has no coordinates); EDSM: 6 kept;
-        // carriers: 1 hub; codex: 4 sites (one row is broken).
-        assert_eq!(stats.pois, 4 + 6 + 1 + 4);
-        assert_eq!(stats.malformed, 1 + 1 + 1 + 1);
+        // carriers: 1 hub (a bad date and a future date skipped); codex: 5
+        // sites (one row is broken, three systems are launch credits).
+        assert_eq!(stats.pois, 4 + 6 + 1 + 5);
+        assert_eq!(stats.malformed, 1 + 1 + 2 + 1);
+        assert_eq!(stats.launch_credits, 3);
         assert_eq!(
             stats.unknown_types.keys().collect::<Vec<_>>(),
             ["EDSM: brandNewType", "GEC: Something New"],
@@ -897,7 +1004,13 @@ Broken,codex_ent_guardian_ruins,,0,Somewhere,Nowhere,x,y,z,,
         let spire = by_id(&f, "codex:thargoid:908619975354");
         assert_eq!(spire.kind, "Thargoid Spire site");
         assert_eq!(spire.summary.as_deref(), Some("Reported here: Barnacle Matrix, Common Thargoid Barnacle."), "labels aren't the localised ones");
-        assert_eq!(by_id(&f, "codex:thargoid:9466778822857").kind, "Thargoid surface site");
+        let found_at_sites = by_id(&f, "codex:thargoid:9466778822857");
+        assert_eq!(found_at_sites.kind, "Thargoid site", "only things found at sites, reported after the launch");
+        assert_eq!(found_at_sites.summary.as_deref(), Some("Reported here: Thargoid Pod, Thargoid Barnacle Barbs."));
+        assert_eq!(by_id(&f, "codex:thargoid:11111111").kind, "Thargoid Barnacle site", "reported at launch, but a known site is near");
+        for credited in ["codex:guardian:3932277478106", "codex:thargoid:3932277478106", "codex:guardian:3107442365122"] {
+            assert!(f.pois.iter().all(|p| p.id != credited), "{credited}: launch credits in Shinrarta Dezhra and Meene aren't sites");
+        }
     }
 
     #[test]
@@ -922,6 +1035,16 @@ Broken,codex_ent_guardian_ruins,,0,Somewhere,Nowhere,x,y,z,,
         let err = build(&opts, &mut |_| {}, Arc::new(AtomicBool::new(false))).unwrap_err();
         assert!(err.to_string().contains("Galactic Exploration Catalog"), "{err}");
         assert_eq!(std::fs::read(out.join(FILE_NAME)).unwrap(), b"old");
+    }
+
+    #[test]
+    fn reads_are_capped_whatever_the_server_says() {
+        // A bogus Content-Length doesn't size the allocation.
+        let bytes = read_capped(&b"0123456789"[..], Some(1 << 40), 10).unwrap();
+        assert_eq!(bytes, b"0123456789");
+        assert!(bytes.capacity() < 1 << 20, "reserved {} bytes", bytes.capacity());
+        let err = read_capped(&b"0123456789x"[..], None, 10).unwrap_err();
+        assert!(err.to_string().contains("larger than 1 MB"), "{err}");
     }
 
     #[test]

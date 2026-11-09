@@ -98,7 +98,10 @@ Layers → **Points of interest** draws them on the map as markers with name
 labels close up:
 - **Guardian sites** and **Thargoid sites**: every system where players have
   reported Guardian ruins, structures or beacons, or Thargoid structures,
-  spires or barnacles in the codex.
+  spires or barnacles in the codex. Systems known only from things found at
+  sites (data logs, barbs) are included when they were reported after the
+  codex's first weeks, when entries could be credited far from where they
+  were found.
 - **Carrier hubs**: systems with 10 or more fleet carriers seen in the last 30
   days, where players gather. Bigger markers mean more carriers.
 - **Mysteries**, **outposts and megaships** (DSSA and other support carriers

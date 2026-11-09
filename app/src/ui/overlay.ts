@@ -29,28 +29,11 @@ import {
 } from "../overlays";
 import { PopulatedLayer } from "../renderer/populated";
 import { loadPopulated, tableFor, type PopulatedData } from "../renderer/populated-data";
+import { button, h, type Child } from "./dom";
+import { DOWNLOAD_SIZES, DownloadJob } from "./download";
 import { errorText, type Toasts } from "./toast";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
-
-/** Shown before a download: the dump's size as of November 2026. */
-export const DOWNLOAD_SIZE = "about 4.7 GB";
-
-type Child = Node | string | null | undefined | false;
-
-function h<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, ...children: Child[]): HTMLElementTagNameMap[K] {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  for (const c of children) if (c) e.append(c);
-  return e;
-}
-
-function button(text: string, onClick: () => void, cls?: string): HTMLButtonElement {
-  const b = h("button", cls, text);
-  b.type = "button";
-  b.addEventListener("click", onClick);
-  return b;
-}
 
 const gb = (bytes: number) => (bytes / 2 ** 30).toFixed(1) + " GB";
 const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
@@ -72,9 +55,7 @@ export class OverlayUi {
   private data: PopulatedData | null = null;
   private state: DataState = "idle";
   private error = "";
-  /** Non-null while a download runs. */
-  private progress: PopulatedProgress | null = null;
-  private updating = false;
+  private readonly job: DownloadJob<PopulatedProgress, PopulatedDone>;
   /** Ordinal layers: values switched off in the legend, for this session. */
   private readonly hidden = new Map<OverlayId, Set<string>>();
   /** A one-off hint under the legend (cleared by the next change). */
@@ -82,11 +63,6 @@ export class OverlayUi {
   /** The settings the drawn style was made from, to skip needless restyles. */
   private applied = "";
   private style: OverlayStyle | null = null;
-  /** Kept across renders so progress ticks don't rebuild the legend (or take the search box's focus). */
-  private readonly progressLine = h("div", "small");
-  private readonly progressFill = h("div");
-  private readonly progressCancel: HTMLButtonElement;
-  private readonly progressEl: HTMLElement;
   private readonly select = $<HTMLSelectElement>("overlay-select");
   private readonly body = $("overlay-body");
   private readonly factionInput: HTMLInputElement;
@@ -128,20 +104,21 @@ export class OverlayUi {
       this.renderFactionResults();
     });
 
-    this.progressCancel = button("Cancel", () => {
-      this.progressCancel.disabled = true;
-      void cancelPopulatedUpdate();
+    // Its progress block is kept across renders, so ticks don't rebuild the
+    // legend (or take the faction search's focus).
+    this.job = new DownloadJob<PopulatedProgress, PopulatedDone>({
+      start: startPopulatedUpdate,
+      cancel: cancelPopulatedUpdate,
+      status: populatedUpdateStatus,
+      onProgressEvent: onPopulatedProgress,
+      onDoneEvent: onPopulatedDone,
+      describe: progressText,
+      fraction: (p) => (p?.bytesTotal ? p.bytesRead / p.bytesTotal : null),
+      onRunningChange: () => this.render(),
+      onProgress: () => this.onStatus(),
+      onDone: (d) => void this.done(d),
+      onStartError: (e) => this.deps.toasts.error(`Couldn't start the download: ${errorText(e)}`),
     });
-    this.progressEl = h("div", "overlay-progress", this.progressLine, h("div", "meter", this.progressFill), this.progressCancel);
-
-    void onPopulatedProgress((p) => {
-      const started = !this.updating;
-      this.updating = true;
-      this.progress = p;
-      if (started) this.render();
-      else this.renderProgress();
-    });
-    void onPopulatedDone((d) => void this.done(d));
   }
 
   get mode(): OverlayId {
@@ -163,11 +140,7 @@ export class OverlayUi {
     this.state = "loading";
     this.render();
     try {
-      const status = await populatedUpdateStatus().catch(() => null);
-      if (status) {
-        this.updating = true;
-        this.progress = status.progress;
-      }
+      await this.job.resume();
       const data = await loadPopulated();
       this.data = data;
       this.layer = data && new PopulatedLayer(data);
@@ -209,7 +182,7 @@ export class OverlayUi {
 
   /** One line for the settings panel. */
   statusText(): string {
-    if (this.updating) return this.progressText();
+    if (this.job.running) return this.job.text();
     switch (this.state) {
       case "ready": {
         const d = this.data!;
@@ -226,25 +199,14 @@ export class OverlayUi {
   }
 
   get running(): boolean {
-    return this.updating;
+    return this.job.running;
   }
 
-  async startUpdate(): Promise<void> {
-    if (this.updating) return;
-    try {
-      await startPopulatedUpdate();
-      this.updating = true;
-      this.progress = null;
-      this.progressCancel.disabled = false;
-      this.render();
-    } catch (e) {
-      this.deps.toasts.error(`Couldn't start the download: ${errorText(e)}`);
-    }
+  startUpdate(): Promise<void> {
+    return this.job.start();
   }
 
   private async done(d: PopulatedDone): Promise<void> {
-    this.updating = false;
-    this.progress = null;
     if (d.ok) {
       const minutes = d.seconds ? ` in ${Math.max(1, Math.round(d.seconds / 60))} min` : "";
       this.deps.toasts.show(`Populated systems updated: ${(d.systems ?? 0).toLocaleString()} systems${minutes}.`);
@@ -322,34 +284,15 @@ export class OverlayUi {
     this.onStatus();
     const mode = this.mode;
     const parts: Child[] = [];
-    if (this.updating) parts.push(this.progressBlock());
+    if (this.job.running) parts.push(this.job.block());
     if (mode !== "none") {
       if (this.state === "loading" || this.state === "idle") parts.push(h("div", "muted small", "Loading populated systems…"));
-      else if (this.state === "missing" && !this.updating) parts.push(this.downloadPrompt());
+      else if (this.state === "missing" && !this.job.running) parts.push(this.downloadPrompt());
       else if (this.state === "error") parts.push(this.errorBlock());
       else if (this.state === "ready" && this.layer) parts.push(...this.legend(mode));
     }
     this.body.replaceChildren(...parts.filter((p): p is Node | string => !!p));
     this.body.hidden = parts.length === 0;
-  }
-
-  private progressText(): string {
-    const p = this.progress;
-    if (!p) return "Connecting to Spansh…";
-    const of = p.bytesTotal ? `${gb(p.bytesRead)} of ${gb(p.bytesTotal)}` : gb(p.bytesRead);
-    return `Downloading: ${of} · ${p.systems.toLocaleString()} systems · ${clock(p.seconds)}`;
-  }
-
-  private progressBlock(): HTMLElement {
-    this.renderProgress();
-    return this.progressEl;
-  }
-
-  private renderProgress(): void {
-    const p = this.progress;
-    this.progressLine.textContent = this.progressText();
-    this.progressFill.style.width = p?.bytesTotal ? `${Math.min(100, (p.bytesRead / p.bytesTotal) * 100).toFixed(1)}%` : "0%";
-    this.onStatus();
   }
 
   private downloadPrompt(): HTMLElement {
@@ -359,7 +302,7 @@ export class OverlayUi {
       h(
         "p",
         "small",
-        `The coloured layers need Spansh's populated-systems dump: ${DOWNLOAD_SIZE} to download (not kept), a few minutes. The map stays usable meanwhile.`,
+        `The coloured layers need Spansh's populated-systems dump: ${DOWNLOAD_SIZES.populated} to download (not kept), a few minutes. The map stays usable meanwhile.`,
       ),
       button("Download", () => void this.startUpdate(), "primary"),
     );
@@ -457,6 +400,12 @@ export class OverlayUi {
     );
     this.factionResults.hidden = found.length === 0;
   }
+}
+
+function progressText(p: PopulatedProgress | null): string {
+  if (!p) return "Connecting to Spansh…";
+  const of = p.bytesTotal ? `${gb(p.bytesRead)} of ${gb(p.bytesTotal)}` : gb(p.bytesRead);
+  return `Downloading: ${of} · ${p.systems.toLocaleString()} systems · ${clock(p.seconds)}`;
 }
 
 function ramp(colours: string[], ticks: Tick[]): HTMLElement {

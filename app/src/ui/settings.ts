@@ -16,6 +16,7 @@ import {
   type Settings,
   type ViewSettings,
 } from "../api";
+import { DOWNLOAD_SIZES } from "./download";
 import { errorText, type Toasts } from "./toast";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -50,6 +51,8 @@ export class SettingsPanel {
   private settings: Settings | null = null;
 
   constructor(private readonly deps: SettingsDeps) {
+    $("set-populated-size").textContent = DOWNLOAD_SIZES.populated;
+    $("set-poi-size").textContent = DOWNLOAD_SIZES.poi;
     $("settings-close").addEventListener("click", () => this.close());
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && !this.el.hidden) this.close();

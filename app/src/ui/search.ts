@@ -73,7 +73,16 @@ export function setupSearch(input: HTMLInputElement, list: HTMLUListElement, dep
             return [];
           });
       if (mine !== seq) return; // a newer query is in flight
-      results = [...places.map((poi): Result => ({ kind: "poi", poi })), ...systems.map((system): Result => ({ kind: "system", system }))];
+      // A system typed out in full comes first, so Enter still goes there
+      // ("Sol", not the carrier hub in Solati); places come before the
+      // other systems that merely start with the query.
+      const typed = query.trim().toLowerCase();
+      const exact = (s: SystemInfo) => s.name.toLowerCase() === typed;
+      results = [
+        ...systems.filter(exact).map((system): Result => ({ kind: "system", system })),
+        ...places.map((poi): Result => ({ kind: "poi", poi })),
+        ...systems.filter((s) => !exact(s)).map((system): Result => ({ kind: "system", system })),
+      ];
       active = 0;
       render();
     }, 120);

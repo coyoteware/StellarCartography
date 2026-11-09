@@ -20,6 +20,7 @@ import {
 } from "../api";
 import { categoryInfo, glyph, type Poi } from "../poi";
 import { SOL, distance } from "../renderer/coords";
+import { h, type Child } from "./dom";
 import { errorText } from "./toast";
 
 const SOURCE_NAMES: Record<DetailsSource, string> = { journal: "your journal", edsm: "EDSM", spansh: "Spansh" };
@@ -58,16 +59,6 @@ function ago(iso: string | null): string {
     if (Math.abs(seconds) >= size) return rtf.format(Math.round(seconds / size), unit);
   }
   return "just now";
-}
-
-type Child = Node | string | null | undefined | false;
-
-/** Tiny DOM builder: `h("div", "class", child, ...)`; falsy children are skipped. */
-function h<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, ...children: Child[]): HTMLElementTagNameMap[K] {
-  const e = document.createElement(tag);
-  if (cls) e.className = cls;
-  for (const c of children) if (c) e.append(c);
-  return e;
 }
 
 function rows(pairs: [string, string | null | undefined][]): HTMLDListElement {

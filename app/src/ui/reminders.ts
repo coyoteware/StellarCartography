@@ -4,6 +4,7 @@
 // downloaded without a click. Checked a minute after start, then hourly
 // (the viewer may stay open for days), at most once a day per dataset.
 
+import { DOWNLOAD_SIZES } from "./download";
 import type { Toasts } from "./toast";
 
 const DAY = 86_400_000;
@@ -51,14 +52,14 @@ export class Reminders {
     this.remind(
       "populated",
       this.deps.populatedBuiltAt(),
-      (days) => `The map layers' data is ${days} days old. Updating downloads about 4.7 GB and takes about 5 minutes.`,
+      (days) => `The map layers' data is ${days} days old. Updating downloads ${DOWNLOAD_SIZES.populated} and takes about 5 minutes.`,
       "Update",
       this.deps.updatePopulated,
     );
     this.remind(
       "poi",
       this.deps.poiBuiltAt(),
-      (days) => `The points of interest are ${days} days old. Updating downloads about 900 MB and takes a few minutes.`,
+      (days) => `The points of interest are ${days} days old. Updating downloads ${DOWNLOAD_SIZES.poi} and takes a few minutes.`,
       "Update",
       this.deps.updatePoi,
     );

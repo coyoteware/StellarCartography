@@ -21,6 +21,7 @@ import { CommanderLayer, SelectionMarker } from "./renderer/commander";
 import { SGR_A, SOL, edToWorld, worldToEd } from "./renderer/coords";
 import { GalaxyGlow } from "./renderer/glow";
 import { PointCloud } from "./renderer/pointcloud";
+import type { PoiLayer } from "./renderer/poi";
 import { View } from "./renderer/view";
 import { CatalogueUi } from "./ui/catalogue";
 import { Hud } from "./ui/hud";
@@ -60,6 +61,13 @@ let viewSettings: ViewSettings = {
   poiHidden: ["planetaryNebula"],
 };
 let reportedTileFailures = 0;
+/**
+ * Bumped by every selection, and by closing the details: a lookup that
+ * comes back after something newer was picked is dropped.
+ */
+let selectionSeq = 0;
+/** The marker layer on show, to notice when an update replaces it. */
+let poiLayer: PoiLayer | null = null;
 let updateReminders = true;
 /** When the catalogue on show was built (Unix seconds). */
 let catalogueBuiltAt: number | null = null;
@@ -69,6 +77,7 @@ const systemPanel = new SystemPanel($("info-panel"), {
   visited: (id64) => visitedById.get(id64),
   places: (id64, name) => places.inSystem(id64, name),
   onClose: () => {
+    selectionSeq++;
     selection.set(null);
     places.highlight(null);
     view.wake();
@@ -101,6 +110,11 @@ const places = new PlacesUi({
   },
   onPick: (poi) => void selectPoi(poi, true),
   onChange: (layer) => {
+    if (layer !== poiLayer) {
+      // A new layer (after an update) knows nothing of the old one's hover.
+      poiLayer = layer;
+      hideHover();
+    }
     if (layer && !layer.object.parent) view.overlay.add(layer.object);
     view.wake();
   },
@@ -178,6 +192,7 @@ function applyView(next: ViewSettings, persist = true): void {
 // --- Galaxy ------------------------------------------------------------------
 
 function select(system: SystemInfo, fly: boolean): void {
+  selectionSeq++;
   const pos = edToWorld(system.pos);
   selection.set(pos);
   systemPanel.show(system);
@@ -188,6 +203,7 @@ function select(system: SystemInfo, fly: boolean): void {
 
 /** Selects a point of interest's system (or, for one outside any system, just the spot). */
 async function selectPoi(poi: Poi, fly: boolean): Promise<void> {
+  const mine = ++selectionSeq;
   if (!poi.system) {
     const pos = edToWorld(poi.pos);
     systemPanel.close();
@@ -203,6 +219,8 @@ async function selectPoi(poi: Poi, fly: boolean): Promise<void> {
     // catalogue's, so the details lookup can ask Spansh.
     const name = poi.system.toLowerCase();
     const found = await searchSystems(poi.system).catch(() => []);
+    // Something else was picked, or the details closed, while it looked.
+    if (mine !== selectionSeq) return;
     system = found.find((s) => s.name.toLowerCase() === name) ?? system;
   }
   select(system, fly);
@@ -473,11 +491,12 @@ canvas.addEventListener("pointerup", async (e) => {
   const hit = cloud.pick(view.renderer, view.camera, x, y);
   console.debug(`pick took ${(performance.now() - t0).toFixed(1)} ms`);
   if (!hit) return;
+  const mine = ++selectionSeq;
   const system = await getSystem(hit.rowid).catch((err) => {
     toasts.error(`Couldn't look up that system: ${errorText(err)}`, { timeout: 8 });
     return null;
   });
-  if (system) select(system, false);
+  if (system && mine === selectionSeq) select(system, false);
 });
 
 canvas.addEventListener("webglcontextlost", (e) => {

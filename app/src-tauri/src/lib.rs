@@ -464,24 +464,48 @@ fn disk_space(dir: String) -> CmdResult<DiskSpace> {
 /// catalogue build.
 const CARRIED_FILES: [&str; 2] = [ingest::populated::FILE_NAME, ingest::poi::FILE_NAME];
 
-/// Copies the map layers' `populated.bin` and the points of interest into a
-/// new data folder that lacks them, so they survive a change of folder. Best
-/// effort: a failure only means downloading them again.
+/// Brings the map layers' `populated.bin` and the points of interest along
+/// to a new data folder (see `carry_file`).
 fn carry_files(from: &Path, to: &Path) {
     if from == to {
         return;
     }
     for name in CARRIED_FILES {
-        let (src, dst) = (from.join(name), to.join(name));
-        if !src.is_file() || dst.exists() {
-            continue;
-        }
-        let partial = to.join(format!("{name}.partial"));
-        let copied = std::fs::copy(&src, &partial).and_then(|_| std::fs::rename(&partial, &dst));
-        if let Err(e) = copied {
-            let _ = std::fs::remove_file(&partial);
-            eprintln!("couldn't copy {} to {}: {e}", src.display(), to.display());
-        }
+        carry_file(from, to, name);
+    }
+}
+
+/// Copies one downloaded dataset from `from` into `to` when `to` has none or
+/// an older one (by modification time, which the copy keeps), so the newest
+/// data follows a change of folder. Best effort: a failure only means
+/// downloading it again.
+fn carry_file(from: &Path, to: &Path, name: &str) {
+    let (src, dst) = (from.join(name), to.join(name));
+    let Ok(meta) = std::fs::metadata(&src) else { return };
+    let Ok(src_time) = meta.modified() else { return };
+    if !meta.is_file() || std::fs::metadata(&dst).and_then(|m| m.modified()).is_ok_and(|t| t >= src_time) {
+        return;
+    }
+    // Not `<name>.partial`: a download may be writing that in `to` right now.
+    let temp = to.join(format!("{name}.carry"));
+    let copied = std::fs::copy(&src, &temp)
+        .and_then(|_| std::fs::File::options().write(true).open(&temp)?.set_modified(src_time))
+        .and_then(|_| std::fs::rename(&temp, &dst));
+    if let Err(e) = copied {
+        let _ = std::fs::remove_file(&temp);
+        eprintln!("couldn't copy {} to {}: {e}", src.display(), to.display());
+    }
+}
+
+/// A download finished into `dir`. If the data folder changed while it ran
+/// (Settings → "Use another folder…", or a build into a new folder), the
+/// file goes to the current folder too. Those switches hold the data lock
+/// for writing, so they and this run one after the other: either the switch
+/// carries the finished file, or this does.
+fn deliver(data: &RwLock<DataSlot>, dir: &Path, name: &str) {
+    let Ok(slot) = data.read() else { return };
+    if slot.dir != dir {
+        carry_file(dir, &slot.dir, name);
     }
 }
 
@@ -726,6 +750,7 @@ fn run_populated_update(app: AppHandle, dir: PathBuf, cancel: Arc<AtomicBool>) {
                 "populated systems: {} in {:.0}s ({} malformed), {} bytes",
                 stats.systems, stats.seconds, stats.malformed, stats.file_bytes
             );
+            deliver(&state.data, &dir, ingest::populated::FILE_NAME);
             PopulatedDone { ok: true, cancelled: false, error: None, systems: Some(stats.systems), seconds: Some(stats.seconds) }
         }
         Err(e) => {
@@ -806,6 +831,7 @@ fn run_poi_update(app: AppHandle, dir: PathBuf, cancel: Arc<AtomicBool>) {
                 "points of interest: {} in {:.0}s ({} malformed, unmapped {:?}), {} bytes",
                 stats.pois, stats.seconds, stats.malformed, stats.unknown_types, stats.file_bytes
             );
+            deliver(&state.data, &dir, ingest::poi::FILE_NAME);
             PoiDone { ok: true, cancelled: false, error: None, pois: Some(stats.pois), seconds: Some(stats.seconds) }
         }
         Err(e) => {
@@ -952,6 +978,13 @@ pub fn run() {
 mod tests {
     use super::*;
 
+    /// Writes `body` to `path` with a modification time `secs` after an arbitrary start.
+    fn write_at(path: &Path, body: &[u8], secs: u64) {
+        std::fs::write(path, body).unwrap();
+        let t = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000 + secs);
+        std::fs::File::options().write(true).open(path).unwrap().set_modified(t).unwrap();
+    }
+
     #[test]
     fn downloaded_datasets_follow_a_new_data_folder() {
         let dir = tempfile::tempdir().unwrap();
@@ -963,18 +996,53 @@ mod tests {
         carry_files(&old, &new);
         assert!(!new.join(layers).exists() && !new.join(poi).exists(), "nothing to carry");
 
-        std::fs::write(old.join(layers), b"layers").unwrap();
+        write_at(&old.join(layers), b"layers", 0);
         carry_files(&old, &new);
         assert_eq!(std::fs::read(new.join(layers)).unwrap(), b"layers");
-        assert!(!new.join(format!("{layers}.partial")).exists());
+        assert!(!new.join(format!("{layers}.carry")).exists());
         assert!(!new.join(poi).exists(), "only what's there is copied");
+        let modified = |p: &Path| std::fs::metadata(p).unwrap().modified().unwrap();
+        assert_eq!(modified(&new.join(layers)), modified(&old.join(layers)), "the copy keeps its age");
+        carry_files(&new, &old);
+        assert_eq!(std::fs::read(old.join(layers)).unwrap(), b"layers", "no copying back and forth");
 
-        // A folder with its own copy keeps it; the other file still comes along.
-        std::fs::write(old.join(layers), b"newer elsewhere").unwrap();
-        std::fs::write(old.join(poi), b"places").unwrap();
+        // The newer copy wins either way; the other file still comes along.
+        write_at(&old.join(layers), b"newer elsewhere", 10);
+        write_at(&old.join(poi), b"places", 0);
         carry_files(&old, &new);
-        assert_eq!(std::fs::read(new.join(layers)).unwrap(), b"layers");
+        assert_eq!(std::fs::read(new.join(layers)).unwrap(), b"newer elsewhere");
         assert_eq!(std::fs::read(new.join(poi)).unwrap(), b"places");
+        write_at(&new.join(layers), b"newest here", 20);
+        carry_files(&old, &new);
+        assert_eq!(std::fs::read(new.join(layers)).unwrap(), b"newest here");
+
+        // A download's own temporary file in the destination is left alone.
+        std::fs::write(new.join(format!("{poi}.partial")), b"half a download").unwrap();
+        write_at(&old.join(poi), b"newer places", 30);
+        carry_files(&old, &new);
+        assert_eq!(std::fs::read(new.join(poi)).unwrap(), b"newer places");
+        assert_eq!(std::fs::read(new.join(format!("{poi}.partial"))).unwrap(), b"half a download");
+    }
+
+    #[test]
+    fn a_download_finishing_after_a_folder_change_follows_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (old, new) = (dir.path().join("old"), dir.path().join("new"));
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::create_dir_all(&new).unwrap();
+        let poi = ingest::poi::FILE_NAME;
+        // The folder the user switched to meanwhile has an older copy.
+        write_at(&new.join(poi), b"stale", 0);
+        write_at(&old.join(poi), b"fresh", 10);
+        let data = RwLock::new(DataSlot { dir: new.clone(), origin: DirOrigin::Settings, dataset: None, error: None });
+
+        deliver(&data, &old, poi);
+        assert_eq!(std::fs::read(new.join(poi)).unwrap(), b"fresh");
+
+        // No change of folder: nothing to do.
+        write_at(&new.join(poi), b"current", 20);
+        deliver(&data, &new, poi);
+        assert_eq!(std::fs::read(new.join(poi)).unwrap(), b"current");
     }
 
     #[test]
