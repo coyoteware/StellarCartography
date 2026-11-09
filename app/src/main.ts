@@ -24,6 +24,7 @@ import { CatalogueUi } from "./ui/catalogue";
 import { Hud } from "./ui/hud";
 import { SystemPanel } from "./ui/details";
 import { OverlayUi } from "./ui/overlay";
+import { Reminders } from "./ui/reminders";
 import { setupSearch } from "./ui/search";
 import { SettingsPanel } from "./ui/settings";
 import { Toasts, errorText } from "./ui/toast";
@@ -54,6 +55,9 @@ let viewSettings: ViewSettings = {
   highlights: {},
 };
 let reportedTileFailures = 0;
+let updateReminders = true;
+/** When the catalogue on show was built (Unix seconds). */
+let catalogueBuiltAt: number | null = null;
 
 const systemPanel = new SystemPanel($("info-panel"), {
   commanderPos: () => commander.current()?.pos,
@@ -89,8 +93,19 @@ const settingsPanel = new SettingsPanel({
   populatedStatus: () => overlay.statusText(),
   populatedRunning: () => overlay.running,
   onPopulatedUpdate: () => void overlay.startUpdate(),
+  onReminders: (on) => (updateReminders = on),
 });
 overlay.onStatus = () => settingsPanel.renderPopulated();
+
+const reminders = new Reminders({
+  toasts,
+  enabled: () => updateReminders,
+  catalogueBuiltAt: () => catalogueBuiltAt,
+  populatedBuiltAt: () => overlay.populated?.builtAt ?? null,
+  busy: async () => overlay.running || (await catalogue.running()),
+  rebuildCatalogue: () => void catalogue.rebuild(),
+  updatePopulated: () => void overlay.startUpdate(),
+});
 const openSettings = { label: "Settings", run: () => void settingsPanel.open() };
 
 const showGalaxy = () => view.lookAt(edToWorld(SGR_A), 95_000, new THREE.Vector3(0, 0.8, 0.6));
@@ -142,6 +157,7 @@ function select(system: SystemInfo, fly: boolean): void {
 
 async function loadGalaxy(status: Extract<DataStatus, { state: "ready" }>): Promise<void> {
   console.info(`galaxy data: ${status.systems} systems from ${status.source} (${status.sourceLastModified}) in ${status.dir}`);
+  catalogueBuiltAt = status.builtAt;
   const [c, g] = await Promise.allSettled([PointCloud.load(), GalaxyGlow.load()]);
   if (c.status === "fulfilled") {
     cloud = c.value;
@@ -157,6 +173,7 @@ async function loadGalaxy(status: Extract<DataStatus, { state: "ready" }>): Prom
   }
   applyView(viewSettings, false);
   void overlay.load();
+  reminders.start();
 }
 
 // --- Commander ---------------------------------------------------------------
@@ -414,6 +431,7 @@ if (import.meta.env.DEV) {
       commander,
       catalogue,
       overlay,
+      reminders,
       settingsPanel,
       systemPanel,
       get cloud() {
@@ -430,7 +448,9 @@ if (import.meta.env.DEV) {
 
 async function boot(): Promise<void> {
   try {
-    viewSettings = (await getSettings()).view;
+    const settings = await getSettings();
+    viewSettings = settings.view;
+    updateReminders = settings.updateReminders;
   } catch (e) {
     toasts.error(`Couldn't read the settings: ${errorText(e)}`);
   }

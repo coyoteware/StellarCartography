@@ -36,7 +36,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::{source, Input};
+use crate::{source, space, Input};
 
 pub const SPANSH_POPULATED_URL: &str = "https://downloads.spansh.co.uk/galaxy_populated.json.gz";
 /// The output file, in the data folder next to the catalogue.
@@ -234,6 +234,7 @@ pub fn build(opts: &Options, progress: &mut dyn FnMut(&Progress), cancel: Arc<At
         Input::File(path) => source::open_file(path)?,
         Input::Url(url) => source::open_url(url, None)?,
     };
+    space::check(&opts.out, space::populated_needs(&opts.out), "the populated-systems update")?;
     let report = |systems: u64, progress: &mut dyn FnMut(&Progress)| {
         progress(&Progress {
             bytes_read: info.bytes_read.load(Ordering::Relaxed),

@@ -49,6 +49,9 @@ On first run the app offers to **download and build** the catalogue (streams
 about 3.4 GB from EDSM, nothing kept but the result; about 10 GB of data;
 10–15 minutes), or to **use an existing build** folder. Later, Settings →
 "Rebuild from EDSM…" refreshes it in the background while the map stays usable.
+Once the catalogue or the map layers are over a week old, a reminder offers
+to update them (Settings → Updates turns it off). Builds check free disk
+space first.
 
 The data folder is chosen in this order:
 1. `STELLAR_DATA_DIR`, if set.

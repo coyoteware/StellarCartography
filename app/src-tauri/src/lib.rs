@@ -119,6 +119,7 @@ struct SettingsView {
     journal_dir_custom: bool,
     journal_dir_found: bool,
     details_source: OnlineSource,
+    update_reminders: bool,
     view: ViewSettings,
 }
 
@@ -343,6 +344,7 @@ fn get_settings(state: State<AppState>) -> CmdResult<SettingsView> {
         journal_dir: journal.as_deref().map(display),
         journal_dir_custom: settings.journal_dir.is_some(),
         details_source: settings.details_source,
+        update_reminders: settings.update_reminders,
         view: settings.view.clone(),
     })
 }
@@ -374,8 +376,9 @@ fn use_data_dir(state: State<AppState>, dir: String) -> CmdResult<DataStatus> {
         return Err(format!("Couldn't open the data there: {e}"));
     }
     let mut settings = state.settings.lock().map_err(err)?;
-    settings.data_dir = Some(found);
+    settings.data_dir = Some(found.clone());
     save_settings(&state, &settings)?;
+    carry_populated(&slot.dir, &found);
     *slot = next;
     Ok(slot.status())
 }
@@ -401,6 +404,53 @@ fn set_details_source(state: State<AppState>, source: OnlineSource) -> CmdResult
     let mut settings = state.settings.lock().map_err(err)?;
     settings.details_source = source;
     save_settings(&state, &settings)
+}
+
+#[tauri::command]
+fn set_update_reminders(state: State<AppState>, on: bool) -> CmdResult<()> {
+    let mut settings = state.settings.lock().map_err(err)?;
+    settings.update_reminders = on;
+    save_settings(&state, &settings)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiskSpace {
+    /// Free on the data folder's drive.
+    free: u64,
+    /// Roughly what a catalogue build there needs, temporary files included.
+    needed: u64,
+    /// Why a build there would be refused, if it would.
+    problem: Option<String>,
+}
+
+/// Free space for a catalogue build into `dir`, for the first-run card.
+#[tauri::command]
+fn disk_space(dir: String) -> CmdResult<DiskSpace> {
+    let dir = PathBuf::from(dir);
+    let needs = ingest::space::catalogue_needs(&dir, None, None);
+    Ok(DiskSpace {
+        free: ingest::space::available(&dir).map_err(|e| format!("{e:#}"))?,
+        needed: needs.data + needs.temp,
+        problem: ingest::space::check(&dir, needs, "the catalogue build").err().map(|e| format!("{e:#}")),
+    })
+}
+
+/// Copies `populated.bin` into a new data folder that has none, so the map
+/// layers survive a change of folder. Best effort: a failure only means the
+/// layers need downloading again.
+fn carry_populated(from: &Path, to: &Path) {
+    let name = ingest::populated::FILE_NAME;
+    let (src, dst) = (from.join(name), to.join(name));
+    if from == to || !src.is_file() || dst.exists() {
+        return;
+    }
+    let partial = to.join(format!("{name}.partial"));
+    let copied = std::fs::copy(&src, &partial).and_then(|_| std::fs::rename(&partial, &dst));
+    if let Err(e) = copied {
+        let _ = std::fs::remove_file(&partial);
+        eprintln!("couldn't copy {} to {}: {e}", src.display(), to.display());
+    }
 }
 
 // --- System details ----------------------------------------------------------
@@ -477,6 +527,9 @@ fn start_build(app: AppHandle, state: State<AppState>, dir: Option<String>, limi
         return Err("The data folder is set by STELLAR_DATA_DIR.".into());
     }
     std::fs::create_dir_all(&target).map_err(|e| format!("Can't create {}: {e}", target.display()))?;
+    // An early, rough check (the build checks again once the dump's size is known).
+    let needs = ingest::space::catalogue_needs(&target, None, limit);
+    ingest::space::check(&target, needs, "the catalogue build").map_err(|e| format!("{e:#}"))?;
     let cancel = Arc::new(AtomicBool::new(false));
     *job = Some(BuildJob { dir: target.clone(), cancel: cancel.clone(), last: None });
     let t = target.clone();
@@ -534,6 +587,9 @@ fn run_build(app: AppHandle, dir: PathBuf, limit: Option<u64>, cancel: Arc<Atomi
                 (Ok(_), _) => (dir.clone(), DirOrigin::Settings),
                 (Err(_), origin) => (slot.dir.clone(), origin),
             };
+            if result.is_ok() {
+                carry_populated(&slot.dir, &dir);
+            }
             *slot = DataSlot::load(next_dir, origin);
             if result.is_ok() && origin == DirOrigin::Settings {
                 if let Ok(mut settings) = state.settings.lock() {
@@ -589,6 +645,7 @@ fn start_populated_update(app: AppHandle, state: State<AppState>) -> CmdResult<(
         }
         slot.dir.clone()
     };
+    ingest::space::check(&dir, ingest::space::populated_needs(&dir), "the populated-systems update").map_err(|e| format!("{e:#}"))?;
     let cancel = Arc::new(AtomicBool::new(false));
     *job = Some(PopulatedJob { cancel: cancel.clone(), last: None });
     let spawned = std::thread::Builder::new()
@@ -741,6 +798,8 @@ pub fn run() {
             cancel_build,
             build_status,
             set_details_source,
+            set_update_reminders,
+            disk_space,
             system_details,
             open_external,
             start_populated_update,
@@ -776,6 +835,28 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn populated_systems_follow_a_new_data_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let (old, new) = (dir.path().join("old"), dir.path().join("new"));
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::create_dir_all(&new).unwrap();
+        let name = ingest::populated::FILE_NAME;
+
+        carry_populated(&old, &new);
+        assert!(!new.join(name).exists(), "nothing to carry");
+
+        std::fs::write(old.join(name), b"layers").unwrap();
+        carry_populated(&old, &new);
+        assert_eq!(std::fs::read(new.join(name)).unwrap(), b"layers");
+        assert!(!new.join(format!("{name}.partial")).exists());
+
+        // A folder with its own copy keeps it.
+        std::fs::write(old.join(name), b"newer elsewhere").unwrap();
+        carry_populated(&old, &new);
+        assert_eq!(std::fs::read(new.join(name)).unwrap(), b"layers");
+    }
 
     #[test]
     fn data_paths_cannot_escape_the_data_dir() {

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::details::OnlineSource;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     /// Galaxy data folder; unset means "find it" (see `resolve_data_dir`).
@@ -17,7 +17,21 @@ pub struct Settings {
     pub journal_dir: Option<PathBuf>,
     /// Where the details panel looks systems up online.
     pub details_source: OnlineSource,
+    /// Offer an update when the catalogue or populated systems are over a week old.
+    pub update_reminders: bool,
     pub view: ViewSettings,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            data_dir: None,
+            journal_dir: None,
+            details_source: OnlineSource::default(),
+            update_reminders: true,
+            view: ViewSettings::default(),
+        }
+    }
 }
 
 /// Display preferences owned by the web view; the backend only stores them.
@@ -107,8 +121,11 @@ mod tests {
         assert!(partial.view.highlights.is_empty());
         assert_eq!(partial.details_source, OnlineSource::Spansh);
 
-        std::fs::write(&path, r#"{"detailsSource":"off"}"#).unwrap();
+        assert!(partial.update_reminders, "reminders are on unless turned off");
+
+        std::fs::write(&path, r#"{"detailsSource":"off","updateReminders":false}"#).unwrap();
         assert_eq!(Settings::load(&path).details_source, OnlineSource::Off);
+        assert!(!Settings::load(&path).update_reminders);
 
         std::fs::write(&path, "not json").unwrap();
         assert_eq!(Settings::load(&path), Settings::default());

@@ -24,6 +24,8 @@ pub enum DataStatus {
         systems: Option<String>,
         source: Option<String>,
         source_last_modified: Option<String>,
+        /// When the catalogue was built (Unix seconds), for the weekly reminder.
+        built_at: Option<u64>,
     },
     /// No data there yet: the first-run case.
     Missing { dir: String },
@@ -105,8 +107,16 @@ impl Dataset {
             systems: meta("systems"),
             source: meta("source"),
             source_last_modified: meta("source_last_modified"),
+            // Builds from before `built_at` was recorded: the database's age.
+            built_at: meta("built_at").and_then(|v| v.parse().ok()).or_else(|| modified_secs(&self.dir.join("galaxy.sqlite"))),
         }
     }
+}
+
+/// A file's modification time in Unix seconds.
+pub fn modified_secs(path: &Path) -> Option<u64> {
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    Some(modified.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs())
 }
 
 #[cfg(test)]
@@ -133,6 +143,9 @@ mod tests {
         drop(db);
         let ds = open(d).unwrap().unwrap();
         assert!(matches!(ds.status(), DataStatus::Ready { systems: Some(s), .. } if s == "3"));
+        // No built_at in the meta table: the file's age stands in.
+        let DataStatus::Ready { built_at: Some(t), .. } = ds.status() else { panic!("no built_at") };
+        assert_eq!(Some(t), modified_secs(&d.join("galaxy.sqlite")));
         assert_eq!(locate_existing(d), Some(d.to_path_buf()));
         assert_eq!(locate_existing(dir.path().parent().unwrap()), None);
     }

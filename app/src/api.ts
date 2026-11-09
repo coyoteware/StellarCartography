@@ -8,7 +8,15 @@ export type Vec3 = [number, number, number];
 
 /** State of the galaxy data folder (app/src-tauri/src/data.rs). */
 export type DataStatus =
-  | { state: "ready"; dir: string; systems: string | null; source: string | null; sourceLastModified: string | null }
+  | {
+      state: "ready";
+      dir: string;
+      systems: string | null;
+      source: string | null;
+      sourceLastModified: string | null;
+      /** When the catalogue was built, in Unix seconds. */
+      builtAt: number | null;
+    }
   | { state: "missing"; dir: string }
   | { state: "broken"; dir: string; error: string };
 
@@ -37,7 +45,17 @@ export interface Settings {
   journalDirCustom: boolean;
   journalDirFound: boolean;
   detailsSource: OnlineSource;
+  /** Offer an update when the catalogue or populated systems are over a week old. */
+  updateReminders: boolean;
   view: ViewSettings;
+}
+
+/** Free space for a catalogue build in a folder (bytes). */
+export interface DiskSpace {
+  free: number;
+  needed: number;
+  /** Why a build there would be refused, if it would. */
+  problem: string | null;
 }
 
 export type BuildPhase = "reading" | "octree" | "densityMaps" | "indexing";
@@ -235,6 +253,8 @@ export const useDataDir = (dir: string) => invoke<DataStatus>("use_data_dir", { 
 export const setJournalDir = (dir: string | null) => invoke<void>("set_journal_dir", { dir });
 export const pickFolder = (title: string, start?: string) => invoke<string | null>("pick_folder", { title, start });
 export const setDetailsSource = (source: OnlineSource) => invoke<void>("set_details_source", { source });
+export const setUpdateReminders = (on: boolean) => invoke<void>("set_update_reminders", { on });
+export const diskSpace = (dir: string) => invoke<DiskSpace>("disk_space", { dir });
 
 /** Builds the catalogue from EDSM into `dir` (default: the current data folder). */
 export const startBuild = (dir?: string, limit?: number) => invoke<string>("start_build", { dir, limit });

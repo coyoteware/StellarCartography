@@ -61,6 +61,7 @@
           Streams the latest dump (about 3.4 GB, not kept) and builds about 10 GB of data. Takes 10–15 minutes.
         </p>
         <div class="path-row"><code id="setup-dir"></code><button id="setup-change" type="button">Change…</button></div>
+        <p id="setup-space" class="muted small" hidden></p>
         <button id="setup-build" type="button" class="primary">Download and build</button>
       </section>
       <section>
@@ -158,6 +159,14 @@
           Colours the map by population, allegiance, government, economy, security, Powerplay or a minor faction
           (Layers → Colour systems by). Powerplay moves weekly; update whenever you like.
         </p>
+      </section>
+      <section>
+        <h2>Updates</h2>
+        <label class="row">
+          Remind me when the catalogue or map layers are over a week old
+          <input type="checkbox" id="set-update-reminders" />
+        </label>
+        <p class="muted small">Nothing downloads until you click Rebuild or Update in the reminder.</p>
       </section>
       <section>
         <h2>Display</h2>

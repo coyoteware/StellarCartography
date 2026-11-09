@@ -5,6 +5,7 @@
 import {
   buildStatus,
   cancelBuild,
+  diskSpace,
   onBuildDone,
   onBuildProgress,
   pickFolder,
@@ -44,6 +45,7 @@ export class CatalogueUi {
       if (dir) {
         this.targetDir = dir;
         $("setup-dir").textContent = dir;
+        void this.showSpace();
       }
     });
     $("setup-build").addEventListener("click", () => void this.start("first-run", this.targetDir));
@@ -72,6 +74,21 @@ export class CatalogueUi {
     if (status.state === "broken") problem.textContent = `The data in ${status.dir} can't be used: ${status.error}`;
     this.card.hidden = true;
     this.setup.hidden = false;
+    void this.showSpace();
+  }
+
+  /** Free space where the build would go; a short drive disables the build. */
+  private async showSpace(): Promise<void> {
+    const dir = this.targetDir;
+    const line = $("setup-space");
+    const build = $<HTMLButtonElement>("setup-build");
+    const space = await diskSpace(dir).catch(() => null);
+    if (dir !== this.targetDir) return; // the folder changed meanwhile
+    line.hidden = !space;
+    build.disabled = !!space?.problem;
+    if (!space) return;
+    line.textContent = space.problem ?? `Needs about ${gb(space.needed)}; ${gb(space.free)} free on that drive.`;
+    line.classList.toggle("problem", !!space.problem);
   }
 
   /** Picks up a build that was already running (the page was reloaded mid-build). */

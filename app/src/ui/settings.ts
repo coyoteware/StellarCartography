@@ -7,6 +7,7 @@ import {
   getSettings,
   pickFolder,
   setDetailsSource,
+  setUpdateReminders,
   setJournalDir,
   useDataDir,
   type DataStatus,
@@ -36,6 +37,8 @@ export interface SettingsDeps {
   populatedStatus: () => string;
   populatedRunning: () => boolean;
   onPopulatedUpdate: () => void;
+  /** The update-reminders switch changed (it's saved already). */
+  onReminders: (on: boolean) => void;
 }
 
 export class SettingsPanel {
@@ -69,6 +72,13 @@ export class SettingsPanel {
       $("set-populated-confirm").hidden = true;
       this.deps.onPopulatedUpdate();
       this.renderPopulated();
+    });
+
+    const reminders = $<HTMLInputElement>("set-update-reminders");
+    reminders.addEventListener("change", () => {
+      setUpdateReminders(reminders.checked)
+        .then(() => this.deps.onReminders(reminders.checked))
+        .catch((e) => this.deps.toasts.error(`Couldn't save the setting: ${errorText(e)}`));
     });
 
     const detailsSource = $<HTMLSelectElement>("set-details-source");
@@ -122,7 +132,8 @@ export class SettingsPanel {
     $("set-dataset").textContent =
       status.state === "ready"
         ? `${Number(status.systems ?? 0).toLocaleString()} systems` +
-          (status.sourceLastModified ? ` · EDSM dump of ${new Date(status.sourceLastModified).toLocaleDateString()}` : "")
+          (status.sourceLastModified ? ` · EDSM dump of ${new Date(status.sourceLastModified).toLocaleDateString()}` : "") +
+          (status.builtAt ? ` · built ${new Date(status.builtAt * 1000).toLocaleDateString()}` : "")
         : status.state === "broken"
           ? `Can't be used: ${status.error}`
           : "Not built yet.";
@@ -140,6 +151,7 @@ export class SettingsPanel {
     $("set-journal-reset").hidden = !s.journalDirCustom;
 
     $<HTMLSelectElement>("set-details-source").value = s.detailsSource;
+    $<HTMLInputElement>("set-update-reminders").checked = s.updateReminders;
     this.renderPopulated();
 
     const view = this.deps.view();

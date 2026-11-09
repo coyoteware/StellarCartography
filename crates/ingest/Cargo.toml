@@ -25,6 +25,9 @@ flate2 = "1"
 png = "0.17"
 reqwest = { version = "0.12", features = ["blocking"] }
 rustc-hash = "2"
+# HashTable: the density map keeps one u64 per boxel, no separate key.
+hashbrown = { version = "0.17", default-features = false }
+fs4 = { version = "1", default-features = false }
 
 [dev-dependencies]
 tempfile = "3"

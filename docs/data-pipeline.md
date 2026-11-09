@@ -1,15 +1,15 @@
 # Data pipeline
 
 How StellarCartography gets its data, what it does with it, and where it
-keeps the results. Figures are from builds on 30 October 2026 (catalogue) and
-9 November 2026 (populated systems).
+keeps the results. Figures are from builds on 9 November 2026, on a 4-core
+cloud machine downloading at about 25 MB/s.
 
 There are four inputs, and only the first two are built into stored datasets:
 
 | Input | Source | Built into | Refreshed |
 | --- | --- | --- | --- |
-| Galaxy catalogue | EDSM dump, 3.4 GB | `galaxy.sqlite`, `tiles/`, density maps | Settings → Rebuild from EDSM |
-| Populated systems | Spansh dump, 4.7 GB | `populated.bin` | Settings → Update from Spansh |
+| Galaxy catalogue | EDSM dump, 3.4 GB | `galaxy.sqlite`, `tiles/`, density maps | weekly reminder, or Settings → Rebuild from EDSM |
+| Populated systems | Spansh dump, 4.7 GB | `populated.bin` | weekly reminder, or Settings → Update from Spansh |
 | System details | Spansh and EDSM APIs, per click | `details-cache.sqlite` (raw answers) | automatically, hourly |
 | Game files | journals, `VisitedStarsCache.dat` | nothing (read into memory) | live |
 
@@ -22,7 +22,7 @@ Every known system, drawn as the star field. Code:
 
 ### Ingest
 
-- **Source:** EDSM's nightly `https://www.edsm.net/dump/systemsWithCoordinates.json.gz`. It's 3.4 GB compressed, with 99.4M systems, one per line.
+- **Source:** EDSM's nightly `https://www.edsm.net/dump/systemsWithCoordinates.json.gz`. It's 3.4 GB compressed, with 99.6M systems, one per line.
 - **Download:** streamed over HTTP and decompressed on the fly. A dropped connection resumes with a Range request, up to 6 times with growing waits ([`source.rs`](../crates/ingest/src/source.rs)).
 - **Raw dump:** never written to disk. The CLI's `--tee file` keeps a copy, and `--input file` reads one.
 - **Fields kept:** id64, name and coordinates. Lines that don't parse are counted and skipped.
@@ -36,10 +36,11 @@ One pass over the stream feeds three outputs.
 - Table `systems (id INTEGER PRIMARY KEY, id64, name COLLATE NOCASE, x32, y32, z32)`.
 - Coordinates are integers in 1/32 ly, the game's own precision.
 - After the load, it builds indexes on `name` and `id64`. That step is parallelised with `PRAGMA threads`, and its sort runs spill to disk on purpose; see the [feasibility report](feasibility-report.md#measurements).
-- A `meta` table holds the source URL, the dump's Last-Modified date and the system count.
+- A `meta` table holds the source URL, the dump's Last-Modified date, the system count and when the build finished (`built_at`).
 
 **Star tiles (`tiles/`)**
-- Every point (position, row id, mass code) is held in memory, about 2 GB for the full dump.
+- Every point is held in memory: its position plus one `u32` holding the row id (low 29 bits) and mass code (top 3). That's 16 bytes per star, 1.5 GiB for the full dump.
+- The array is sized from the dump's size before reading starts, so it never doubles.
 - They're sorted into an octree over a fixed root cube 100,000 ly on a side.
 - Each node keeps at most one star per cell of a 128³ grid, up to 40,000 stars, and passes the rest to its children. Maximum depth is 20.
 - Drawing a node together with its ancestors draws every star in its region, so the viewer can stream detail by distance.
@@ -53,6 +54,7 @@ One pass over the stream feeds three outputs.
   - an id64 includes the system's index within its boxel;
   - the highest index seen in a boxel is a lower bound on how many systems it holds;
   - the map sums those bounds over about 52M boxels.
+- While reading, each boxel costs one `u64`: the id64, minus its body bits, of the highest-numbered system seen there. That one value holds both the boxel and the index. The table is sized up front, about 0.6 GiB.
 
 ### Storage
 
@@ -63,11 +65,28 @@ One pass over the stream feeds three outputs.
 
 | Output | Size |
 | --- | --- |
-| `galaxy.sqlite` | 8.7 GB |
-| `tiles/` (8,592 files) | 1.0 GB |
+| `galaxy.sqlite` | 8.7 GiB |
+| `tiles/` (8,607 files) | 1.0 GiB |
 | `density.png` + `coverage.png` | 3.5 MB |
 
-Time: 11.3 minutes for the full dump, before the index build was made about 5× faster (not re-measured at full size since).
+| Figure | Value |
+| --- | --- |
+| Time | 3.9 minutes: 2.5 downloading and parsing, 0.2 for tiles and density maps, 1.4 indexing |
+| Peak memory | 2.1 GiB (it was 3.0 GiB before points and boxels were packed) |
+| Peak disk use | 11.1 GiB: 9.7 GiB of new outputs, plus 1.4 GiB of SQLite sort files in the system temp folder |
+
+### Checks before a build
+
+A build checks free space before it writes anything, and refuses with a
+message naming the drive, how much it needs and how much is free
+([`space.rs`](../crates/ingest/src/space.rs)).
+- **New outputs:** the previous build's size plus 10%. Without a previous build, the dump size × 2.9, plus a 10% margin.
+- **SQLite sort files:** a quarter of the outputs, in the system temp folder. When that's on the same drive as the data folder, the drive needs room for both.
+- **Result:** for a full build on one drive, the check asks for about 13.5 GiB, against the 11.1 GiB measured.
+- **Where it runs:**
+  - when a build or download is started, so the app can refuse straight away;
+  - again inside the build, once the dump's size is known;
+  - on the first-run card, which shows the space needed and free, and disables the build button when the drive is short.
 
 ## 2. Populated systems
 
@@ -126,9 +145,10 @@ Little-endian:
 | `factionStart` | u32 × (n+1) | system i's factions are entries `factionStart[i]` to `factionStart[i+1]` |
 | `factionId`, `factionInfluence` | u32, u16 | faction index; influence in units of 0.01% |
 
-- The file is written as `populated.bin.partial` and renamed into place when complete.
+- The file is written as `populated.bin.partial` and renamed into place when complete. The update first checks for room for a second copy.
 - The web view maps each column straight onto a typed array, without decoding ([`populated-data.ts`](../app/src/renderer/populated-data.ts)).
 - Catalogue rebuilds never touch this file.
+- When the data folder changes (Settings → "Use another folder…", or a build into a new folder), the file is copied into the new folder if that has none, so the layers come along.
 
 | Figure | Value |
 | --- | --- |
@@ -187,9 +207,15 @@ The web view reads the data folder through the backend's `galaxy` URL scheme.
 That scheme refuses any path that would leave the folder. `galaxy.sqlite` is
 opened read-only for search and lookups.
 
-## Known gaps
+## Refreshing
 
-- **Full re-downloads:** both dumps are downloaded in full every time (3.4 GB and 4.7 GB). EDSM's 7-day dump and Spansh's 1-day dump would allow incremental updates; neither is implemented.
-- **Build memory:** the catalogue build holds every point, and a map of about 52M boxels, in memory.
-- **Disk during rebuild:** a rebuild needs room for a second copy of the catalogue until the swap.
-- **Moving the data folder:** `populated.bin` stays in the old folder, so the layers need downloading again.
+- **The reminder:** when the catalogue or the populated systems are over a week old, a toast says so, with a Rebuild or Update button. Nothing downloads until it's clicked.
+- **When it checks:** a minute after start, then hourly. It reminds at most once a day per dataset, and stays quiet while a build or download runs.
+- **Off switch:** Settings → Updates.
+- **What it compares:** the catalogue's `built_at`, or the database file's age for builds made before it was recorded, and `populated.bin`'s `builtAt`.
+- **Full downloads, on purpose:** both datasets are always downloaded in full (3.4 GB and 4.7 GB), which is fine at once a week. EDSM's 7-day dump and Spansh's 1-day dump would allow incremental updates, but appending to SQLite and inserting into existing tiles isn't worth it at that pace.
+
+## Limits
+
+- **Build memory:** 2.1 GiB at peak, almost all of it the 16-byte points (1.5 GiB) and the boxel table (0.6 GiB). Going lower means building the octree out of core: spilling points to disk and shuffling them there. That isn't done.
+- **Catalogue size:** the packed points allow up to 536M systems. A larger dump stops with an error naming the limit.

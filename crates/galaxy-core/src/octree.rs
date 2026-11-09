@@ -40,11 +40,34 @@ pub const INDEX_VERSION: u32 = 1;
 pub const ROOT_MIN: Vec3 = [-50000.0, -50000.0, -25000.0];
 pub const ROOT_SIZE: f32 = 100000.0;
 
+/// One system as the octree build sees it: 16 bytes, so the full catalogue
+/// (~100M systems) fits in about 1.6 GB while the tree is built.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Point {
     pub pos: Vec3,
-    pub rowid: u32,
-    pub mass_code: u8,
+    /// Row id in the low 29 bits, mass code in the top 3.
+    packed: u32,
+}
+
+impl Point {
+    /// Row ids must stay below this (536,870,912) to fit beside the mass code.
+    pub const MAX_ROWID: u32 = (1 << 29) - 1;
+
+    /// Panics if `rowid` exceeds [`Point::MAX_ROWID`] or `mass_code` exceeds 7;
+    /// callers check the row id first (the ingest stops with an error).
+    pub fn new(pos: Vec3, rowid: u32, mass_code: u8) -> Self {
+        assert!(rowid <= Self::MAX_ROWID, "row id {rowid} too large for a packed point");
+        assert!(mass_code < 8, "mass code {mass_code} out of range");
+        Self { pos, packed: rowid | (u32::from(mass_code) << 29) }
+    }
+
+    pub fn rowid(&self) -> u32 {
+        self.packed & Self::MAX_ROWID
+    }
+
+    pub fn mass_code(&self) -> u8 {
+        (self.packed >> 29) as u8
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -282,7 +305,7 @@ pub fn write_tile(path: &Path, min: Vec3, size: f32, points: &[Point]) -> Result
     }
     w.write_all(&size.to_le_bytes())?;
     for p in points {
-        w.write_all(&p.rowid.to_le_bytes())?;
+        w.write_all(&p.rowid().to_le_bytes())?;
     }
     for p in points {
         for (&v, &m) in p.pos.iter().zip(&min) {
@@ -290,7 +313,7 @@ pub fn write_tile(path: &Path, min: Vec3, size: f32, points: &[Point]) -> Result
         }
     }
     for p in points {
-        w.write_all(&[p.mass_code])?;
+        w.write_all(&[p.mass_code()])?;
     }
     w.flush()?;
     Ok(())
@@ -326,15 +349,11 @@ pub fn read_tile(path: &Path) -> Result<Tile> {
                 let o = pos_off + (i * 3 + axis) * 2;
                 u16::from_le_bytes([buf[o], buf[o + 1]])
             };
-            Point {
-                rowid: u32_at(HEADER_LEN + 4 * i),
-                pos: [
-                    dequantise(q(0), min[0], size),
-                    dequantise(q(1), min[1], size),
-                    dequantise(q(2), min[2], size),
-                ],
-                mass_code: buf[mc_off + i],
-            }
+            Point::new(
+                [dequantise(q(0), min[0], size), dequantise(q(1), min[1], size), dequantise(q(2), min[2], size)],
+                u32_at(HEADER_LEN + 4 * i).min(Point::MAX_ROWID),
+                buf[mc_off + i] & 7,
+            )
         })
         .collect();
     Ok(Tile { min, size, points })
@@ -358,7 +377,7 @@ mod tests {
                 } else {
                     [next() * 90000.0 - 45000.0, next() * 2000.0 - 1000.0, next() * 90000.0 - 20000.0]
                 };
-                Point { pos, rowid: i as u32, mass_code: (i % 8) as u8 }
+                Point::new(pos, i as u32, (i % 8) as u8)
             })
             .collect()
     }
@@ -385,10 +404,11 @@ mod tests {
             assert_eq!(tile.points.len(), node.count as usize);
             let tolerance = size / 65535.0;
             for p in &tile.points {
-                let o = &original[p.rowid as usize];
-                assert!(!seen[p.rowid as usize], "rowid {} stored twice", p.rowid);
-                seen[p.rowid as usize] = true;
-                assert_eq!(p.mass_code, o.mass_code);
+                let rowid = p.rowid() as usize;
+                let o = &original[rowid];
+                assert!(!seen[rowid], "rowid {rowid} stored twice");
+                seen[rowid] = true;
+                assert_eq!(p.mass_code(), o.mass_code());
                 for axis in 0..3 {
                     let err = (p.pos[axis] - o.pos[axis]).abs();
                     assert!(err <= tolerance, "node {} axis {axis}: err {err} > {tolerance}", node.key);
@@ -411,6 +431,21 @@ mod tests {
                 assert_eq!(node.children & (1 << octant) != 0, keys.contains(&child), "{child}");
             }
         }
+    }
+
+    #[test]
+    fn points_pack_into_16_bytes() {
+        assert_eq!(std::mem::size_of::<Point>(), 16);
+        let p = Point::new([1.0, 2.0, 3.0], Point::MAX_ROWID, 7);
+        assert_eq!((p.rowid(), p.mass_code()), (Point::MAX_ROWID, 7));
+        let p = Point::new([0.0; 3], 99_390_303, 0);
+        assert_eq!((p.rowid(), p.mass_code()), (99_390_303, 0));
+    }
+
+    #[test]
+    #[should_panic(expected = "too large")]
+    fn row_ids_past_the_packing_limit_are_refused() {
+        Point::new([0.0; 3], Point::MAX_ROWID + 1, 0);
     }
 
     #[test]

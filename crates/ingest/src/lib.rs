@@ -12,12 +12,13 @@
 mod density;
 pub mod populated;
 mod source;
+pub mod space;
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
 use galaxy_core::octree::{self, BuildParams, Point};
@@ -80,6 +81,8 @@ pub struct Progress {
 
 #[derive(Serialize, Default, Debug, Clone)]
 pub struct Stats {
+    /// When the build finished, in Unix seconds.
+    pub built_at: u64,
     pub source: String,
     pub source_last_modified: Option<String>,
     pub compressed_bytes: u64,
@@ -176,6 +179,24 @@ struct Row {
 
 const PROGRESS_EVERY: Duration = Duration::from_millis(250);
 
+/// Compressed bytes per record in EDSM's dump: 3,694,367,811 bytes for
+/// 99,390,303 systems (October 2026).
+const DUMP_BYTES_PER_RECORD: f64 = 37.2;
+
+/// How many systems to make room for up front: from the dump's size (plus 3%
+/// for a denser dump), capped by `limit`. Sizing the points from the start,
+/// rather than letting the Vec double, keeps a 2 GB array from briefly
+/// needing 6 GB once the catalogue passes a power of two.
+fn expected_records(compressed: Option<u64>, limit: Option<u64>) -> usize {
+    let from_size = compressed.map(|b| (b as f64 / DUMP_BYTES_PER_RECORD * 1.03) as u64);
+    let n = match (from_size, limit) {
+        (Some(s), Some(l)) => s.min(l),
+        (Some(n), None) | (None, Some(n)) => n,
+        (None, None) => 100_000_000,
+    };
+    n.min(u64::from(Point::MAX_ROWID)) as usize
+}
+
 /// Runs the whole build into the staging folder. `progress` is called a few
 /// times a second; setting `cancel` stops the build with an error.
 pub fn build(opts: &Options, progress: &mut dyn FnMut(&Progress), cancel: Arc<AtomicBool>) -> Result<Built> {
@@ -195,6 +216,7 @@ fn build_into(opts: &Options, staging: &Path, progress: &mut dyn FnMut(&Progress
         Input::File(path) => source::open_file(path)?,
         Input::Url(url) => source::open_url(url, opts.tee.as_deref())?,
     };
+    space::check(&opts.out, space::catalogue_needs(&opts.out, info.total, opts.limit), "the catalogue build")?;
     let mut stats = Stats {
         source: info.description.clone(),
         source_last_modified: info.last_modified.clone(),
@@ -218,8 +240,9 @@ fn build_into(opts: &Options, staging: &Path, progress: &mut dyn FnMut(&Progress
         std::thread::spawn(move || write_sqlite(&path, rx, cancel))
     };
 
-    let mut points: Vec<Point> = Vec::with_capacity(if opts.limit.is_some() { 1 << 20 } else { 100_000_000 });
-    let mut density = density::Accumulator::new();
+    let expected = expected_records(info.total, opts.limit);
+    let mut points: Vec<Point> = Vec::with_capacity(expected);
+    let mut density = density::Accumulator::with_capacity((expected as f64 * density::BOXELS_PER_SYSTEM) as usize);
     let mut batch = Vec::with_capacity(10_000);
     let mut rowid: u32 = 0;
     let mut last_report = Instant::now();
@@ -251,13 +274,20 @@ fn build_into(opts: &Options, staging: &Path, progress: &mut dyn FnMut(&Progress
                 continue;
             }
         }
+        if rowid >= Point::MAX_ROWID {
+            bail!("the dump has more than {} systems, more than the tile format can number", Point::MAX_ROWID);
+        }
         rowid += 1;
         if let Some(id) = rec.id64 {
             density.add_system(id, pos);
         }
         if octree::contains_root(pos) {
             let mass_code = rec.id64.map_or(0, |id| (id & 7) as u8);
-            points.push(Point { pos, rowid, mass_code });
+            if points.len() == points.capacity() {
+                // A bigger dump than expected: grow by an eighth, not double.
+                points.reserve_exact(points.len() / 8 + 1024);
+            }
+            points.push(Point::new(pos, rowid, mass_code));
         } else {
             stats.outside_octree += 1;
         }
@@ -314,6 +344,7 @@ fn build_into(opts: &Options, staging: &Path, progress: &mut dyn FnMut(&Progress
 
     report(Phase::Indexing, stats.records_read);
     stats.seconds_indexes = writer.join().map_err(|_| anyhow::anyhow!("sqlite writer panicked"))??;
+    stats.built_at = unix_now();
     finish_sqlite(&sqlite, &stats)?;
 
     stats.sqlite_bytes = std::fs::metadata(&sqlite)?.len();
@@ -325,6 +356,10 @@ fn build_into(opts: &Options, staging: &Path, progress: &mut dyn FnMut(&Progress
         .sum();
     stats.seconds_total = started.elapsed().as_secs_f64();
     Ok(stats)
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
 fn to32(v: f64) -> i64 {
@@ -395,6 +430,7 @@ fn finish_sqlite(path: &Path, stats: &Stats) -> Result<()> {
     put.execute(["source", &stats.source])?;
     put.execute(["source_last_modified", stats.source_last_modified.as_deref().unwrap_or("")])?;
     put.execute(["systems", &stats.systems_stored.to_string()])?;
+    put.execute(["built_at", &stats.built_at.to_string()])?;
     put.execute(["coordinate_scale", "32"])?;
     Ok(())
 }
@@ -467,6 +503,18 @@ mod tests {
         let db = rusqlite::Connection::open(out.join("galaxy.sqlite")).unwrap();
         let x32: i64 = db.query_row("SELECT x32 FROM systems WHERE name = 'colonia'", [], |r| r.get(0)).unwrap();
         assert_eq!(x32, -9530 * 32 - 16);
+        let built_at: String = db.query_row("SELECT value FROM meta WHERE key = 'built_at'", [], |r| r.get(0)).unwrap();
+        assert!(built_at.parse::<u64>().unwrap() > 1_700_000_000);
+    }
+
+    #[test]
+    fn capacity_comes_from_the_dump_size_or_limit() {
+        // The October 2026 dump: room for its 99.4M systems plus 3%.
+        let full = expected_records(Some(3_694_367_811), None);
+        assert!((99_390_303..103_000_000).contains(&full), "{full}");
+        assert_eq!(expected_records(Some(3_694_367_811), Some(2_000_000)), 2_000_000);
+        assert_eq!(expected_records(None, Some(5)), 5);
+        assert_eq!(expected_records(None, None), 100_000_000);
     }
 
     #[test]
