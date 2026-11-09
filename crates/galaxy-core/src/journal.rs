@@ -2,11 +2,14 @@
 //!
 //! The game writes `Journal.<timestamp>.<part>.log` files (one JSON object
 //! per line) to `%USERPROFILE%\Saved Games\Frontier Developments\Elite Dangerous`.
-//! Only the events that carry a position (`FSDJump`, `CarrierJump`, `Location`)
-//! and the ones that say which commander is playing (`Commander`, `LoadGame`)
-//! are read.
+//! Only the events that carry a position (`FSDJump`, `CarrierJump`, `Location`),
+//! the ones that say which commander is playing (`Commander`, `LoadGame`),
+//! `Docked` and `ApproachSettlement` are read. The arrival, docking and
+//! approach events also describe the system and station (factions,
+//! Powerplay, services...); the latest line of each is kept as a
+//! [`Snapshot`] and parsed on demand (see [`crate::details::journal`]).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -31,7 +34,87 @@ pub struct Jump {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
     Commander { fid: String, name: String },
-    Jump(Jump),
+    /// An arrival or login position; `docked_at` is the MarketID of the
+    /// station the ship is docked at, when the event says so.
+    Jump { jump: Jump, docked_at: Option<u64> },
+    Docked { timestamp: String, id64: u64, market_id: u64 },
+    /// Approaching a planetary port or settlement.
+    ApproachSettlement { timestamp: String, id64: u64, market_id: u64 },
+}
+
+/// The latest journal line describing a system or station.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Snapshot {
+    pub timestamp: String,
+    pub line: String,
+}
+
+/// What the journals last said about one station. Each kind of event
+/// carries different fields (only `Docked` has landing pads, only
+/// `ApproachSettlement` the body), so the latest of each is kept.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct StationSnapshots {
+    /// The system it was in at the newest snapshot (fleet carriers move).
+    pub system: u64,
+    pub docked: Option<Snapshot>,
+    /// Docked at login (`Location`) or aboard a carrier as it jumped (`CarrierJump`).
+    pub docked_arrival: Option<Snapshot>,
+    pub approach: Option<Snapshot>,
+}
+
+impl StationSnapshots {
+    fn newest(&self) -> Option<&str> {
+        [&self.docked, &self.docked_arrival, &self.approach]
+            .into_iter()
+            .flatten()
+            .map(|s| s.timestamp.as_str())
+            .max()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum StationEvent {
+    Docked,
+    DockedArrival,
+    Approach,
+}
+
+/// Latest snapshots seen in the journals, for every commander.
+#[derive(Debug, Default)]
+pub struct Snapshots {
+    /// Latest `FSDJump` / `CarrierJump` / `Location` per system id64.
+    pub systems: HashMap<u64, Snapshot>,
+    /// Per station MarketID.
+    pub stations: HashMap<u64, StationSnapshots>,
+}
+
+impl Snapshots {
+    /// Stations whose newest snapshot was in system `id64`.
+    pub fn stations_in(&self, id64: u64) -> impl Iterator<Item = &StationSnapshots> {
+        self.stations.values().filter(move |s| s.system == id64)
+    }
+
+    fn record_system(&mut self, id64: u64, timestamp: &str, line: &str) {
+        let newer = self.systems.get(&id64).is_none_or(|s| s.timestamp.as_str() <= timestamp);
+        if newer {
+            self.systems.insert(id64, Snapshot { timestamp: timestamp.into(), line: line.into() });
+        }
+    }
+
+    fn record_station(&mut self, kind: StationEvent, market_id: u64, id64: u64, timestamp: &str, line: &str) {
+        let station = self.stations.entry(market_id).or_default();
+        if station.newest().is_none_or(|t| t <= timestamp) {
+            station.system = id64;
+        }
+        let slot = match kind {
+            StationEvent::Docked => &mut station.docked,
+            StationEvent::DockedArrival => &mut station.docked_arrival,
+            StationEvent::Approach => &mut station.approach,
+        };
+        if slot.as_ref().is_none_or(|s| s.timestamp.as_str() <= timestamp) {
+            *slot = Some(Snapshot { timestamp: timestamp.into(), line: line.into() });
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -75,9 +158,21 @@ struct RawEvent {
     name: Option<String>,
     #[serde(rename = "Commander")]
     commander: Option<String>,
+    #[serde(rename = "MarketID")]
+    market_id: Option<u64>,
+    #[serde(rename = "Docked")]
+    docked: Option<bool>,
 }
 
-const INTERESTING: [&str; 5] = ["\"FSDJump\"", "\"CarrierJump\"", "\"Location\"", "\"Commander\"", "\"LoadGame\""];
+const INTERESTING: [&str; 7] = [
+    "\"FSDJump\"",
+    "\"CarrierJump\"",
+    "\"Location\"",
+    "\"Commander\"",
+    "\"LoadGame\"",
+    "\"Docked\"",
+    "\"ApproachSettlement\"",
+];
 
 /// Parses one journal line. Returns `None` for events we don't use or for
 /// malformed lines (the game occasionally leaves a half-written last line).
@@ -89,14 +184,26 @@ pub fn parse_line(line: &str) -> Option<Event> {
     match raw.event.as_str() {
         "FSDJump" | "CarrierJump" | "Location" => {
             let p = raw.star_pos?;
-            Some(Event::Jump(Jump {
+            let docked_at = raw.market_id.filter(|_| raw.docked == Some(true));
+            let jump = Jump {
                 timestamp: raw.timestamp.unwrap_or_default(),
                 kind: raw.event,
                 system: raw.star_system?,
                 id64: raw.system_address,
                 pos: [p[0] as f32, p[1] as f32, p[2] as f32],
-            }))
+            };
+            Some(Event::Jump { jump, docked_at })
         }
+        "Docked" => Some(Event::Docked {
+            timestamp: raw.timestamp.unwrap_or_default(),
+            id64: raw.system_address?,
+            market_id: raw.market_id?,
+        }),
+        "ApproachSettlement" => Some(Event::ApproachSettlement {
+            timestamp: raw.timestamp.unwrap_or_default(),
+            id64: raw.system_address?,
+            market_id: raw.market_id?,
+        }),
         "Commander" => Some(Event::Commander { fid: raw.fid?, name: raw.name? }),
         "LoadGame" => Some(Event::Commander { fid: raw.fid?, name: raw.commander? }),
         _ => None,
@@ -112,20 +219,35 @@ pub fn default_journal_dir() -> Option<PathBuf> {
     Some(Path::new(&home).join("Saved Games").join("Frontier Developments").join("Elite Dangerous"))
 }
 
-/// Journal files in chronological order. Both the old
-/// (`Journal.170101120000.01.log`) and current (`Journal.2024-01-01T120000.01.log`)
-/// names sort correctly by file name.
+/// Journal files in chronological order. Names are either the old
+/// `Journal.YYMMDDhhmmss.NN.log` or the current `Journal.YYYY-MM-DDThhmmss.NN.log`,
+/// which don't sort together by name ("Journal.22..." comes after
+/// "Journal.2026-..."), so they're ordered by the time in the name.
 pub fn journal_files(dir: &Path) -> Result<Vec<PathBuf>> {
-    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)?
+    let mut files: Vec<(String, PathBuf)> = std::fs::read_dir(dir)?
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("Journal.") && n.ends_with(".log"))
+        .filter_map(|p| {
+            let name = p.file_name()?.to_str()?;
+            (name.starts_with("Journal.") && name.ends_with(".log")).then(|| (sort_key(name), p.clone()))
         })
         .collect();
     files.sort();
-    Ok(files)
+    Ok(files.into_iter().map(|(_, p)| p).collect())
+}
+
+/// `YYYY-MM-DDThhmmss.NN` for either journal name format.
+fn sort_key(name: &str) -> String {
+    let Some(rest) = name.strip_prefix("Journal.").and_then(|n| n.strip_suffix(".log")) else {
+        return name.to_string();
+    };
+    let (stamp, part) = rest.split_once('.').unwrap_or((rest, ""));
+    let b = stamp.as_bytes();
+    let old_format = b.len() == 12 && b.iter().all(u8::is_ascii_digit);
+    if old_format {
+        format!("20{}-{}-{}T{}.{part}", &stamp[0..2], &stamp[2..4], &stamp[4..6], &stamp[6..12])
+    } else {
+        format!("{stamp}.{part}")
+    }
 }
 
 /// Incremental reader that remembers which commander is active and how far
@@ -133,6 +255,7 @@ pub fn journal_files(dir: &Path) -> Result<Vec<PathBuf>> {
 #[derive(Debug, Default)]
 pub struct Reader {
     pub history: History,
+    pub snapshots: Snapshots,
     current_fid: Option<String>,
     current_file: Option<PathBuf>,
     offset: u64,
@@ -175,24 +298,34 @@ impl Reader {
         }
         file.seek(SeekFrom::Start(self.offset))?;
         let mut reader = BufReader::new(file);
-        let mut line = String::new();
+        let mut buf = Vec::new();
         let mut new = Vec::new();
         loop {
-            line.clear();
-            let n = reader.read_line(&mut line)?;
+            buf.clear();
+            let n = reader.read_until(b'\n', &mut buf)?;
             // Stop before a partial last line; it will be re-read once complete.
-            if n == 0 || !line.ends_with('\n') {
+            if n == 0 || !buf.ends_with(b"\n") {
                 break;
             }
             self.offset += n as u64;
-            match parse_line(line.trim_end()) {
+            // A line the game left with broken UTF-8 (say, a crash mid-write)
+            // is decoded lossily rather than failing the whole read.
+            let text = String::from_utf8_lossy(&buf);
+            let line = text.trim_end();
+            match parse_line(line) {
                 Some(Event::Commander { fid, name }) => {
                     let track = self.history.commanders.entry(fid.clone()).or_default();
                     track.fid = fid.clone();
                     track.name = name;
                     self.current_fid = Some(fid);
                 }
-                Some(Event::Jump(jump)) => {
+                Some(Event::Jump { jump, docked_at }) => {
+                    if let Some(id64) = jump.id64 {
+                        self.snapshots.record_system(id64, &jump.timestamp, line);
+                        if let Some(market_id) = docked_at {
+                            self.snapshots.record_station(StationEvent::DockedArrival, market_id, id64, &jump.timestamp, line);
+                        }
+                    }
                     let fid = self.current_fid.clone().unwrap_or_else(|| "unknown".into());
                     let track = self.history.commanders.entry(fid.clone()).or_default();
                     track.fid = fid.clone();
@@ -204,6 +337,12 @@ impl Reader {
                         track.jumps.push(jump.clone());
                         new.push((fid, jump));
                     }
+                }
+                Some(Event::Docked { timestamp, id64, market_id }) => {
+                    self.snapshots.record_station(StationEvent::Docked, market_id, id64, &timestamp, line);
+                }
+                Some(Event::ApproachSettlement { timestamp, id64, market_id }) => {
+                    self.snapshots.record_station(StationEvent::Approach, market_id, id64, &timestamp, line);
                 }
                 None => {}
             }
@@ -233,6 +372,12 @@ impl JournalSource {
 
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// System and station snapshots from every journal read so far.
+    pub fn snapshots(&mut self) -> Result<&Snapshots> {
+        self.history()?;
+        Ok(&self.reader.as_ref().unwrap().snapshots)
     }
 }
 
@@ -264,21 +409,38 @@ mod tests {
     use std::io::Write;
 
     const COMMANDER: &str = r#"{ "timestamp":"2026-10-01T18:00:00Z", "event":"Commander", "FID":"F1234", "Name":"Test Pilot" }"#;
-    const LOCATION: &str = r#"{ "timestamp":"2026-10-01T18:00:05Z", "event":"Location", "Docked":true, "StarSystem":"Sol", "SystemAddress":10477373803, "StarPos":[0.00000,0.00000,0.00000] }"#;
+    const LOCATION: &str = r#"{ "timestamp":"2026-10-01T18:00:05Z", "event":"Location", "Docked":true, "StationName":"Abraham Lincoln", "MarketID":128016640, "StarSystem":"Sol", "SystemAddress":10477373803, "StarPos":[0.00000,0.00000,0.00000] }"#;
     const FSDJUMP: &str = r#"{ "timestamp":"2026-10-01T18:10:00Z", "event":"FSDJump", "Taxi":false, "StarSystem":"Sagittarius A*", "SystemAddress":20578934, "StarPos":[25.21875,-20.90625,25899.96875], "JumpDist":42.1 }"#;
+    const DOCKED: &str = r#"{ "timestamp":"2026-10-01T18:20:00Z", "event":"Docked", "StationName":"Test Port", "StationType":"Coriolis", "StarSystem":"Sagittarius A*", "SystemAddress":20578934, "MarketID":3228100352 }"#;
+    const APPROACH: &str = r#"{ "timestamp":"2026-10-01T18:15:00Z", "event":"ApproachSettlement", "Name":"Test Port", "MarketID":3228100352, "SystemAddress":20578934, "BodyID":3, "BodyName":"Sagittarius A* 1" }"#;
     const CARRIER: &str = r#"{ "timestamp":"2026-10-01T19:00:00Z", "event":"CarrierJump", "Docked":true, "StarSystem":"Colonia", "SystemAddress":3238296097059, "StarPos":[-9530.50000,-910.28125,19808.12500] }"#;
 
     #[test]
     fn parses_position_events() {
-        let Some(Event::Jump(j)) = parse_line(FSDJUMP) else { panic!("no jump") };
+        let Some(Event::Jump { jump: j, docked_at: None }) = parse_line(FSDJUMP) else { panic!("no jump") };
         assert_eq!(j.system, "Sagittarius A*");
         assert_eq!(j.id64, Some(20578934));
         assert_eq!(j.pos, [25.21875, -20.90625, 25899.96875]);
         assert_eq!(j.kind, "FSDJump");
 
-        let Some(Event::Jump(j)) = parse_line(CARRIER) else { panic!("no carrier jump") };
+        let Some(Event::Jump { jump: j, .. }) = parse_line(CARRIER) else { panic!("no carrier jump") };
         assert_eq!(j.system, "Colonia");
         assert_eq!(j.kind, "CarrierJump");
+
+        let Some(Event::Jump { docked_at, .. }) = parse_line(LOCATION) else { panic!("no location") };
+        assert_eq!(docked_at, Some(128016640));
+        assert_eq!(
+            parse_line(DOCKED),
+            Some(Event::Docked { timestamp: "2026-10-01T18:20:00Z".into(), id64: 20578934, market_id: 3228100352 })
+        );
+        assert_eq!(
+            parse_line(APPROACH),
+            Some(Event::ApproachSettlement {
+                timestamp: "2026-10-01T18:15:00Z".into(),
+                id64: 20578934,
+                market_id: 3228100352
+            })
+        );
 
         assert_eq!(
             parse_line(COMMANDER),
@@ -323,5 +485,85 @@ mod tests {
         assert_eq!(new.len(), 1);
         assert_eq!(new[0].1.system, "Colonia");
         assert_eq!(source.history().unwrap().latest().unwrap().jumps.len(), 3);
+    }
+
+    #[test]
+    fn keeps_the_latest_system_and_station_snapshots() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut f = File::create(dir.path().join("Journal.2026-10-01T180000.01.log")).unwrap();
+        let older = FSDJUMP.replace("18:10:00", "17:00:00");
+        // Out of order on purpose: the newer line must win.
+        writeln!(f, "{COMMANDER}\n{LOCATION}\n{FSDJUMP}\n{older}\n{APPROACH}\n{DOCKED}").unwrap();
+        f.flush().unwrap();
+
+        let mut source = JournalSource::new(dir.path().to_path_buf());
+        let snaps = source.snapshots().unwrap();
+        assert_eq!(snaps.systems[&20578934].line, FSDJUMP);
+        assert_eq!(snaps.systems[&10477373803].line, LOCATION);
+        let stations: Vec<_> = snaps.stations_in(20578934).collect();
+        assert_eq!(stations.len(), 1);
+        assert_eq!(stations[0].docked.as_ref().unwrap().line, DOCKED);
+        assert_eq!(stations[0].approach.as_ref().unwrap().line, APPROACH);
+        // Docked at login: the Location line doubles as a station snapshot.
+        let sol = snaps.stations_in(10477373803).next().unwrap();
+        assert_eq!(sol.docked_arrival.as_ref().unwrap().line, LOCATION);
+        assert!(sol.docked.is_none());
+    }
+
+    #[test]
+    fn invalid_utf8_lines_do_not_stop_the_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut f = File::create(dir.path().join("Journal.2026-10-01T180000.01.log")).unwrap();
+        writeln!(f, "{COMMANDER}").unwrap();
+        f.write_all(b"{ \"event\":\"Music\", \"MusicTrack\":\"\xd0\x9f\xd1\" }\n").unwrap();
+        writeln!(f, "{FSDJUMP}").unwrap();
+        f.flush().unwrap();
+        let mut source = JournalSource::new(dir.path().to_path_buf());
+        assert_eq!(source.history().unwrap().commanders["F1234"].jumps.len(), 1);
+    }
+
+    #[test]
+    fn a_moved_carrier_is_listed_where_it_was_seen_last() {
+        let mut snaps = Snapshots::default();
+        snaps.record_station(StationEvent::Docked, 7, 1, "2026-10-01T10:00:00Z", "docked in 1");
+        snaps.record_station(StationEvent::DockedArrival, 7, 2, "2026-10-02T10:00:00Z", "jumped to 2");
+        // An older line read later (file order) must not move it back.
+        snaps.record_station(StationEvent::Docked, 7, 1, "2026-09-01T10:00:00Z", "older");
+        assert_eq!(snaps.stations_in(1).count(), 0);
+        let c = snaps.stations_in(2).next().unwrap();
+        assert_eq!(c.docked.as_ref().unwrap().line, "docked in 1");
+        assert_eq!(c.docked_arrival.as_ref().unwrap().line, "jumped to 2");
+    }
+
+    #[test]
+    fn journal_files_sort_by_time_across_name_formats() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in [
+            "Journal.2026-11-08T111224.01.log",
+            "Journal.220130155905.01.log",
+            "Journal.2022-08-23T222932.01.log",
+            "Journal.211105145112.02.log",
+            "Journal.211105145112.01.log",
+            "Journal.log",
+            "notes.txt",
+        ] {
+            File::create(dir.path().join(name)).unwrap();
+        }
+        let names: Vec<String> = journal_files(dir.path())
+            .unwrap()
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "Journal.211105145112.01.log",
+                "Journal.211105145112.02.log",
+                "Journal.220130155905.01.log",
+                "Journal.2022-08-23T222932.01.log",
+                "Journal.2026-11-08T111224.01.log",
+                "Journal.log",
+            ]
+        );
     }
 }

@@ -23,12 +23,16 @@ export interface ViewSettings {
   route: boolean;
 }
 
+/** Where the details panel looks systems up online; the other site is the fallback. */
+export type OnlineSource = "spansh" | "edsm" | "off";
+
 export interface Settings {
   dataDir: string;
   dataDirOrigin: DirOrigin;
   journalDir: string | null;
   journalDirCustom: boolean;
   journalDirFound: boolean;
+  detailsSource: OnlineSource;
   view: ViewSettings;
 }
 
@@ -98,7 +102,121 @@ export interface VisitedSystem {
   approximate: boolean;
 }
 
+// --- System details (app/src-tauri/src/details.rs) ----------------------------
+
+/** Where a piece of system detail came from. */
+export type DetailsSource = "journal" | "edsm" | "spansh";
+
+export interface Sourced {
+  source: DetailsSource;
+  /** ISO timestamp the source last saw this, when known. */
+  asOf: string | null;
+}
+
+export interface SystemOverview extends Sourced {
+  allegiance: string | null;
+  government: string | null;
+  economy: string | null;
+  secondEconomy: string | null;
+  security: string | null;
+  population: number | null;
+  controllingFaction: string | null;
+  controllingFactionState: string | null;
+  /** Permit name when the system needs one. */
+  permit: string | null;
+}
+
+export interface PowerplayInfo extends Sourced {
+  controllingPower: string | null;
+  /** Powerplay 2.0 state: Exploited, Fortified, Stronghold, Unoccupied, ... */
+  state: string | null;
+  /** 0..1 progress towards the next state, when reported. */
+  controlProgress: number | null;
+  reinforcement: number | null;
+  undermining: number | null;
+  powers: string[];
+  /** Powers contesting an unoccupied system, with their progress (0..1). */
+  conflict: { power: string; progress: number }[];
+}
+
+export interface FactionInfo {
+  name: string;
+  allegiance: string | null;
+  government: string | null;
+  /** 0..1 */
+  influence: number | null;
+  state: string | null;
+  activeStates: string[];
+  pendingStates: string[];
+  recoveringStates: string[];
+  happiness: string | null;
+  controlling: boolean;
+  /** Your reputation with them (journal only), -100..100. */
+  myReputation: number | null;
+}
+
+/** A war, civil war or election (journal only). */
+export interface ConflictInfo {
+  kind: string;
+  status: string | null;
+  sides: { faction: string; stake: string | null; wonDays: number | null }[];
+}
+
+export interface FactionsInfo extends Sourced {
+  factions: FactionInfo[];
+  conflicts: ConflictInfo[];
+}
+
+export interface StationInfo extends Sourced {
+  name: string;
+  /** Coriolis, Orbis, Outpost, FleetCarrier, CraterOutpost, OnFootSettlement, ... */
+  kind: string | null;
+  marketId: number | null;
+  distanceLs: number | null;
+  /** Largest landing pad: "L", "M", "S", or null when unknown. */
+  maxPad: "L" | "M" | "S" | null;
+  services: string[];
+  economy: string | null;
+  faction: string | null;
+  government: string | null;
+  allegiance: string | null;
+}
+
+export interface BodiesInfo extends Sourced {
+  count: number | null;
+  primaryStar: string | null;
+  scoopable: boolean | null;
+}
+
+export interface RemoteStatus {
+  source: DetailsSource;
+  /** False when the lookup failed; `error` says why. */
+  ok: boolean;
+  /** The site answered but has no record of the system. */
+  missing: boolean;
+  error: string | null;
+  /** When the cached copy was fetched (ISO). */
+  fetchedAt: string | null;
+}
+
+export interface SystemDetails {
+  overview: SystemOverview | null;
+  powerplay: PowerplayInfo | null;
+  factions: FactionsInfo | null;
+  stations: StationInfo[];
+  bodies: BodiesInfo | null;
+  /** Online lookups made (or served from the cache) for this answer. */
+  remote: RemoteStatus[];
+  /** Pages about this system on EDSM, Inara and Spansh. */
+  links: { label: string; url: string }[];
+}
+
 export const datasetInfo = () => invoke<DataStatus>("dataset_info");
+/** Everything known about a system, from the journals and online sources. `refresh` skips the cache. */
+export const systemDetails = (id64: string | null, name: string, refresh = false) =>
+  invoke<SystemDetails>("system_details", { id64, name, refresh });
+/** Opens an EDSM, Inara or Spansh page in the default browser. */
+export const openExternal = (url: string) => invoke<void>("open_external", { url });
 export const visitedSystems = () => invoke<VisitedSystem[]>("visited_systems");
 export const searchSystems = (query: string) => invoke<SystemInfo[]>("search_systems", { query });
 export const getSystem = (rowid: number) => invoke<SystemInfo | null>("get_system", { rowid });
@@ -111,6 +229,7 @@ export const useDataDir = (dir: string) => invoke<DataStatus>("use_data_dir", { 
 /** `null` goes back to the game's default journal folder. */
 export const setJournalDir = (dir: string | null) => invoke<void>("set_journal_dir", { dir });
 export const pickFolder = (title: string, start?: string) => invoke<string | null>("pick_folder", { title, start });
+export const setDetailsSource = (source: OnlineSource) => invoke<void>("set_details_source", { source });
 
 /** Builds the catalogue from EDSM into `dir` (default: the current data folder). */
 export const startBuild = (dir?: string, limit?: number) => invoke<string>("start_build", { dir, limit });

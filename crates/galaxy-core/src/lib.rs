@@ -3,8 +3,11 @@
 //! * [`id64`]: decoding Elite: Dangerous system addresses into boxel positions.
 //! * [`octree`]: the on-disk point-cloud tile format the viewer streams.
 //! * [`journal`]: parsing the jump events out of the player journal.
+//! * [`details`]: system details (factions, Powerplay, stations) from the
+//!   journal, Spansh and EDSM in one model.
 //! * [`visited`]: reading the game's `VisitedStarsCache.dat`.
 
+pub mod details;
 pub mod id64;
 pub mod journal;
 pub mod octree;

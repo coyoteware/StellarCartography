@@ -36,6 +36,13 @@ pnpm tauri dev
 
 (In Windows PowerShell with the default script policy, use `pnpm.cmd` in place of `pnpm`.)
 
+To debug by hand, run `debug.bat` (or double-click it). It starts the Vite dev
+server in a window of its own and a debug build of the app in the current one,
+with Rust backtraces on. When the app closes, press R to rebuild and restart it
+while the dev server keeps running, or Q to stop both. In the app, Ctrl+Shift+I
+opens the WebView2 dev tools (so does right-click → Inspect on a panel; the map
+keeps right-click for panning).
+
 On first run the app offers to **download and build** the catalogue (streams
 about 3.4 GB from EDSM, nothing kept but the result; about 10 GB of data;
 10–15 minutes), or to **use an existing build** folder. Later, Settings →
@@ -51,6 +58,26 @@ The journal folder defaults to
 `%USERPROFILE%\Saved Games\Frontier Developments\Elite Dangerous`. You can change it
 in Settings, or override it with `ED_JOURNAL_DIR`. Settings are saved in
 `%APPDATA%\io.github.stellarcartography.viewer\settings.json`.
+
+## System details
+
+Clicking a star opens a panel with what's known about the system:
+- population, government, economy and security;
+- Powerplay: the controlling power and its state, control progress and
+  reinforcement/undermining, or each power's progress in an unoccupied system;
+- minor factions, with influence, states, and any war or election;
+- stations, with type, largest pad, distance and notable services;
+- the main star and body count, and your own visits.
+
+Each section says where it came from and how old it is:
+- **Your journals** cover the systems you've visited, as they were when you were there.
+- **[Spansh](https://spansh.co.uk)'s system API** covers any system and is the default online source.
+- **[EDSM](https://www.edsm.net)'s APIs** are the fallback. EDSM has no Powerplay or landing pad data.
+
+Whichever source saw a section last wins. Online answers are cached for an hour
+in `%LOCALAPPDATA%\io.github.stellarcartography.viewer\details-cache.sqlite`.
+Settings → System details switches the online source, or turns lookups off
+(journal only).
 
 ## Build the galaxy data from the command line
 
@@ -93,6 +120,7 @@ from the Actions tab with "Run workflow".
 ## Data and credits
 
 - System catalogue: [EDSM](https://www.edsm.net) nightly dump `systemsWithCoordinates.json.gz`.
+- System details: [Spansh](https://spansh.co.uk) and [EDSM](https://www.edsm.net) APIs, looked up per system on demand.
 - The galaxy glow ray-marches a density map built from id64 boxel indices. The
   idea comes from [spansh/elite-galaxy-map](https://github.com/spansh/elite-galaxy-map);
   the shader and data here are our own.

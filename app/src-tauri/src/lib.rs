@@ -1,8 +1,10 @@
 //! Tauri backend: serves the generated galaxy data to the web view, answers
 //! system lookups from `galaxy.sqlite`, tails the player journal, keeps the
-//! user's settings, and runs the catalogue build (first run and rebuilds).
+//! user's settings, runs the catalogue build (first run and rebuilds), and
+//! assembles per-system details from the journal and online sources.
 
 mod data;
+mod details;
 mod settings;
 
 use std::path::{Component, Path, PathBuf};
@@ -11,6 +13,8 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use data::{DataStatus, Dataset, DirOrigin};
+use details::{Online, OnlineSource};
+use galaxy_core::details::SystemDetails;
 use galaxy_core::id64::Id64;
 use galaxy_core::journal::{CommanderSource, CommanderTrack, Jump, JournalSource};
 use galaxy_core::visited::{self, VisitedEntry};
@@ -20,6 +24,7 @@ use settings::{Settings, ViewSettings};
 use tauri::http::{header, Response, StatusCode};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_opener::OpenerExt;
 
 /// The custom scheme the web view fetches tiles and density maps from:
 /// `http://galaxy.localhost/<path>` on Windows, `galaxy://localhost/<path>` elsewhere.
@@ -31,6 +36,7 @@ struct AppState {
     data: RwLock<DataSlot>,
     commander: Mutex<Option<JournalSource>>,
     build: Mutex<Option<BuildJob>>,
+    online: Online,
 }
 
 /// The current data folder and, when it holds a usable build, the open dataset.
@@ -104,6 +110,7 @@ struct SettingsView {
     journal_dir: Option<String>,
     journal_dir_custom: bool,
     journal_dir_found: bool,
+    details_source: OnlineSource,
     view: ViewSettings,
 }
 
@@ -311,6 +318,7 @@ fn get_settings(state: State<AppState>) -> CmdResult<SettingsView> {
         journal_dir_found: journal.as_ref().is_some_and(|d| d.is_dir()),
         journal_dir: journal.as_deref().map(display),
         journal_dir_custom: settings.journal_dir.is_some(),
+        details_source: settings.details_source,
         view: settings.view.clone(),
     })
 }
@@ -362,6 +370,58 @@ fn set_journal_dir(state: State<AppState>, dir: Option<String>) -> CmdResult<()>
     save_settings(&state, &settings)?;
     *state.commander.lock().map_err(err)? = journal_dir(&settings).and_then(open_commander);
     Ok(())
+}
+
+#[tauri::command]
+fn set_details_source(state: State<AppState>, source: OnlineSource) -> CmdResult<()> {
+    let mut settings = state.settings.lock().map_err(err)?;
+    settings.details_source = source;
+    save_settings(&state, &settings)
+}
+
+// --- System details ----------------------------------------------------------
+
+/// Everything known about a system: the journal's snapshot when the
+/// commander has been there, merged with an online lookup (unless that's
+/// switched off). `refresh` skips the hour-long online cache.
+#[tauri::command]
+async fn system_details(
+    state: State<'_, AppState>,
+    id64: Option<String>,
+    name: String,
+    refresh: bool,
+) -> CmdResult<SystemDetails> {
+    let id64: Option<u64> = id64.and_then(|s| s.parse().ok());
+    // The journal is a bonus: if it can't be read, the online answer still shows.
+    let journal = match id64 {
+        Some(id) => {
+            let mut source = state.commander.lock().map_err(err)?;
+            match source.as_mut().map(|s| s.snapshots()) {
+                Some(Ok(snaps)) => galaxy_core::details::journal::from_snapshots(snaps.systems.get(&id), snaps.stations_in(id)),
+                Some(Err(e)) => {
+                    eprintln!("journal unavailable for system details: {e:#}");
+                    SystemDetails::default()
+                }
+                None => SystemDetails::default(),
+            }
+        }
+        None => SystemDetails::default(),
+    };
+    let first = state.settings.lock().map_err(err)?.details_source;
+    let online = state.online.lookup(first, id64, &name, refresh).await;
+    let base = SystemDetails { links: galaxy_core::details::links(id64, &name, None), ..Default::default() };
+    Ok(galaxy_core::details::merge(galaxy_core::details::combine(journal, online), base))
+}
+
+/// Sites the details panel links to; nothing else is opened.
+const EXTERNAL_SITES: [&str; 3] = ["https://spansh.co.uk/", "https://inara.cz/", "https://www.edsm.net/"];
+
+#[tauri::command]
+fn open_external(app: AppHandle, url: String) -> CmdResult<()> {
+    if !EXTERNAL_SITES.iter().any(|site| url.starts_with(site)) {
+        return Err(format!("not opening {url}: only Spansh, Inara and EDSM links are allowed"));
+    }
+    app.opener().open_url(url, None::<&str>).map_err(err)
 }
 
 #[tauri::command]
@@ -550,6 +610,7 @@ fn spawn_journal_watcher(app: AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .register_asynchronous_uri_scheme_protocol(SCHEME, |ctx, request, responder| {
             let app = ctx.app_handle().clone();
             let path = request.uri().path().to_string();
@@ -573,11 +634,16 @@ pub fn run() {
             start_build,
             cancel_build,
             build_status,
+            set_details_source,
+            system_details,
+            open_external,
         ])
         .setup(|app| {
             let paths = app.path();
             let settings_path = paths.app_config_dir()?.join("settings.json");
-            let default_data_dir = paths.app_local_data_dir()?.join("data");
+            let local = paths.app_local_data_dir()?;
+            let default_data_dir = local.join("data");
+            let online = Online::new(&local.join("details-cache.sqlite"));
             let settings = Settings::load(&settings_path);
             let (dir, origin) = data::resolve_data_dir(&settings, &default_data_dir);
             eprintln!("data dir: {} ({origin:?})", dir.display());
@@ -588,6 +654,7 @@ pub fn run() {
                 settings: Mutex::new(settings),
                 commander: Mutex::new(commander),
                 build: Mutex::new(None),
+                online,
             });
             spawn_journal_watcher(app.handle().clone());
             Ok(())

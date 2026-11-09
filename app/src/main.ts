@@ -13,6 +13,7 @@ import {
   type Jump,
   type SystemInfo,
   type ViewSettings,
+  type VisitedSystem,
 } from "./api";
 import { CommanderLayer, SelectionMarker } from "./renderer/commander";
 import { SGR_A, SOL, edToWorld, worldToEd } from "./renderer/coords";
@@ -21,7 +22,7 @@ import { PointCloud } from "./renderer/pointcloud";
 import { View } from "./renderer/view";
 import { CatalogueUi } from "./ui/catalogue";
 import { Hud } from "./ui/hud";
-import { showSystem } from "./ui/info";
+import { SystemPanel } from "./ui/details";
 import { setupSearch } from "./ui/search";
 import { SettingsPanel } from "./ui/settings";
 import { Toasts, errorText } from "./ui/toast";
@@ -32,7 +33,6 @@ const view = new View($("viewport"));
 const hud = new Hud($("hud"));
 const toasts = new Toasts($("toasts"));
 const catalogue = new CatalogueUi(toasts);
-const infoPanel = $("info-panel");
 const commander = new CommanderLayer();
 const selection = new SelectionMarker();
 view.overlay.add(commander.object, selection.object);
@@ -42,8 +42,19 @@ let glow: GalaxyGlow | null = null;
 let commanders: CommanderPayload | null = null;
 let selectedFid: string | null = null;
 let visitedCache: { total: number; approximate: number } | null = null;
+const visitedById = new Map<string, VisitedSystem>();
 let viewSettings: ViewSettings = { pointBudget: 5_000_000, exposure: 1, glow: true, stars: true, route: true };
 let reportedTileFailures = 0;
+
+const systemPanel = new SystemPanel($("info-panel"), {
+  commanderPos: () => commander.current()?.pos,
+  visited: (id64) => visitedById.get(id64),
+  onClose: () => {
+    selection.set(null);
+    view.wake();
+  },
+  onError: (message) => toasts.error(message, { timeout: 8 }),
+});
 
 const settingsPanel = new SettingsPanel({
   toasts,
@@ -87,7 +98,7 @@ function applyView(next: ViewSettings, persist = true): void {
 function select(system: SystemInfo, fly: boolean): void {
   const pos = edToWorld(system.pos);
   selection.set(pos);
-  showSystem(infoPanel, system, commander.current()?.pos);
+  systemPanel.show(system);
   if (fly) view.flyTo(pos, 60);
   view.wake();
 }
@@ -146,6 +157,7 @@ async function loadVisitedCache(): Promise<void> {
   if (systems.length === 0) return;
   visitedCache = { total: systems.length, approximate: systems.filter((s) => s.approximate).length };
   commander.setVisitedCache(systems);
+  for (const s of systems) visitedById.set(s.id64, s);
   updateLocation();
   view.wake();
 }
@@ -203,6 +215,8 @@ async function loadCommander(): Promise<void> {
       }
     }
     track.jumps.push(jump);
+    // The journal now has a fresh snapshot of that system.
+    systemPanel.refreshIfShowing(jump.id64);
     if (fid === selectedFid) {
       commander.addJump(jump);
       updateLocation();
@@ -338,6 +352,7 @@ if (import.meta.env.DEV) {
       commander,
       catalogue,
       settingsPanel,
+      systemPanel,
       get cloud() {
         return cloud;
       },

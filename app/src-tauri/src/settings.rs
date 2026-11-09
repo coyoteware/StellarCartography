@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::details::OnlineSource;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -12,6 +14,8 @@ pub struct Settings {
     pub data_dir: Option<PathBuf>,
     /// Journal folder; unset means the game's default location.
     pub journal_dir: Option<PathBuf>,
+    /// Where the details panel looks systems up online.
+    pub details_source: OnlineSource,
     pub view: ViewSettings,
 }
 
@@ -81,6 +85,10 @@ mod tests {
         let partial = Settings::load(&path);
         assert_eq!(partial.view.exposure, 1.5);
         assert_eq!(partial.view.point_budget, 5_000_000);
+        assert_eq!(partial.details_source, OnlineSource::Spansh);
+
+        std::fs::write(&path, r#"{"detailsSource":"off"}"#).unwrap();
+        assert_eq!(Settings::load(&path).details_source, OnlineSource::Off);
 
         std::fs::write(&path, "not json").unwrap();
         assert_eq!(Settings::load(&path), Settings::default());

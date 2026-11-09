@@ -5,10 +5,12 @@ import {
   datasetInfo,
   getSettings,
   pickFolder,
+  setDetailsSource,
   setJournalDir,
   useDataDir,
   type DataStatus,
   type DirOrigin,
+  type OnlineSource,
   type Settings,
   type ViewSettings,
 } from "../api";
@@ -51,6 +53,13 @@ export class SettingsPanel {
       $("set-rebuild-confirm").hidden = true;
       this.close();
       void this.deps.onRebuild();
+    });
+
+    const detailsSource = $<HTMLSelectElement>("set-details-source");
+    detailsSource.addEventListener("change", () => {
+      setDetailsSource(detailsSource.value as OnlineSource).catch((e) =>
+        this.deps.toasts.error(`Couldn't save the setting: ${errorText(e)}`),
+      );
     });
 
     $("set-journal-change").addEventListener("click", () => void this.changeJournalDir());
@@ -102,6 +111,8 @@ export class SettingsPanel {
       : "Not found: travel history and live location are off until this points at the game's journal folder.";
     $("set-journal-status").classList.toggle("problem", !s.journalDirFound);
     $("set-journal-reset").hidden = !s.journalDirCustom;
+
+    $<HTMLSelectElement>("set-details-source").value = s.detailsSource;
 
     const view = this.deps.view();
     $<HTMLSelectElement>("set-budget").value = String(view.pointBudget);

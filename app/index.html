@@ -20,17 +20,21 @@
       </div>
     </div>
 
-    <div class="panel" id="layers-panel">
-      <label><input type="checkbox" id="layer-glow" checked /> Galaxy glow</label>
-      <label><input type="checkbox" id="layer-stars" checked /> Known systems</label>
-      <label><input type="checkbox" id="layer-route" checked /> Travel history</label>
-      <div id="commander" hidden>
-        <select id="commander-select"></select>
-        <div id="commander-location"></div>
+    <!-- Right-hand column: layers on top, the selected system's details below
+         (scrolls when it doesn't fit). -->
+    <div id="right-column">
+      <div class="panel" id="layers-panel">
+        <label><input type="checkbox" id="layer-glow" checked /> Galaxy glow</label>
+        <label><input type="checkbox" id="layer-stars" checked /> Known systems</label>
+        <label><input type="checkbox" id="layer-route" checked /> Travel history</label>
+        <div id="commander" hidden>
+          <select id="commander-select"></select>
+          <div id="commander-location"></div>
+        </div>
       </div>
-    </div>
 
-    <div class="panel" id="info-panel" hidden></div>
+      <div class="panel" id="info-panel" tabindex="-1" hidden></div>
+    </div>
 
     <div id="hud"></div>
     <div id="help">Drag to rotate · right-drag to pan · scroll to zoom · click a star for details</div>
@@ -110,6 +114,22 @@
           <button id="set-journal-change" type="button">Change…</button>
           <button id="set-journal-reset" type="button" hidden>Use default</button>
         </div>
+      </section>
+      <section>
+        <h2>System details</h2>
+        <label class="row">
+          Look systems up on
+          <select id="set-details-source">
+            <option value="spansh">Spansh</option>
+            <option value="edsm">EDSM</option>
+            <option value="off">Nowhere (journal only)</option>
+          </select>
+        </label>
+        <p class="muted small">
+          Clicking a star shows its factions, Powerplay and stations. Systems you've visited use your journal; others
+          are looked up online, falling back to the other site if the first is down. Spansh has Powerplay and landing
+          pads, EDSM doesn't. Answers are cached for an hour.
+        </p>
       </section>
       <section>
         <h2>Display</h2>
