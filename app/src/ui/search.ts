@@ -1,27 +1,43 @@
 import { searchSystems, type SystemInfo } from "../api";
+import { categoryInfo, glyph, type Poi } from "../poi";
+import { describePoi } from "./places";
 
-/** Debounced prefix search with keyboard navigation. */
-export function setupSearch(
-  input: HTMLInputElement,
-  list: HTMLUListElement,
-  onPick: (s: SystemInfo) => void,
-  onError: (e: unknown) => void,
-): void {
-  let results: SystemInfo[] = [];
+type Result = { kind: "system"; system: SystemInfo } | { kind: "poi"; poi: Poi };
+
+/** Points of interest listed above the systems. */
+const MAX_PLACES = 5;
+
+export interface SearchDeps {
+  onPickSystem: (s: SystemInfo) => void;
+  onPickPoi: (p: Poi) => void;
+  /** Points of interest matching a query, best first. */
+  places: (query: string, limit: number) => Poi[];
+  onError: (e: unknown) => void;
+}
+
+/** Debounced prefix search over systems and places, with keyboard navigation. */
+export function setupSearch(input: HTMLInputElement, list: HTMLUListElement, deps: SearchDeps): void {
+  let results: Result[] = [];
   let active = 0;
   let timer = 0;
   let seq = 0;
 
   const render = () => {
     list.replaceChildren(
-      ...results.map((s, i) => {
+      ...results.map((r, i) => {
         const li = document.createElement("li");
         li.className = i === active ? "active" : "";
         const name = document.createElement("div");
-        name.textContent = s.name;
-        const coords = document.createElement("span");
-        coords.textContent = s.pos.map((v) => v.toFixed(0)).join(", ");
-        li.append(name, coords);
+        const meta = document.createElement("span");
+        if (r.kind === "system") {
+          name.textContent = r.system.name;
+          meta.textContent = r.system.pos.map((v) => v.toFixed(0)).join(", ");
+        } else {
+          li.classList.add("place");
+          name.append(glyph(categoryInfo(r.poi.category).shape), ` ${r.poi.name}`);
+          meta.textContent = describePoi(r.poi);
+        }
+        li.append(name, meta);
         li.addEventListener("mousedown", (e) => {
           e.preventDefault();
           pick(i);
@@ -33,13 +49,14 @@ export function setupSearch(
   };
 
   const pick = (i: number) => {
-    const s = results[i];
-    if (!s) return;
-    input.value = s.name;
+    const r = results[i];
+    if (!r) return;
+    input.value = r.kind === "system" ? r.system.name : r.poi.name;
     results = [];
     render();
     input.blur();
-    onPick(s);
+    if (r.kind === "system") deps.onPickSystem(r.system);
+    else deps.onPickPoi(r.poi);
   };
 
   input.addEventListener("input", () => {
@@ -47,15 +64,16 @@ export function setupSearch(
     const query = input.value;
     timer = window.setTimeout(async () => {
       const mine = ++seq;
-      const found =
-        query.trim().length < 2
-          ? []
-          : await searchSystems(query).catch((e) => {
-              onError(e);
-              return [];
-            });
+      const short = query.trim().length < 2;
+      const places = short ? [] : deps.places(query, MAX_PLACES);
+      const systems = short
+        ? []
+        : await searchSystems(query).catch((e) => {
+            deps.onError(e);
+            return [];
+          });
       if (mine !== seq) return; // a newer query is in flight
-      results = found;
+      results = [...places.map((poi): Result => ({ kind: "poi", poi })), ...systems.map((system): Result => ({ kind: "system", system }))];
       active = 0;
       render();
     }, 120);

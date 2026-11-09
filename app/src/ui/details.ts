@@ -1,7 +1,8 @@
 // System details panel. Shows the basics as soon as a star is picked, then
 // fills in population, Powerplay, factions, stations and bodies from the
 // journals and online sources, each section labelled with where it came from
-// and how old it is.
+// and how old it is. Points of interest in the system are listed straight
+// away, from the downloaded catalogue.
 
 import {
   massCode,
@@ -17,6 +18,7 @@ import {
   type Vec3,
   type VisitedSystem,
 } from "../api";
+import { categoryInfo, glyph, type Poi } from "../poi";
 import { SOL, distance } from "../renderer/coords";
 import { errorText } from "./toast";
 
@@ -99,6 +101,8 @@ export interface PanelDeps {
   commanderPos: () => Vec3 | undefined;
   /** This system's entry in the game's visited-stars cache. */
   visited: (id64: string) => VisitedSystem | undefined;
+  /** Points of interest in the system. */
+  places: (id64: string | null, name: string) => Poi[];
   onClose: () => void;
   onError: (message: string) => void;
 }
@@ -198,7 +202,7 @@ export class SystemPanel {
       h("div", "head-buttons", refresh, close),
     );
 
-    const parts: Child[] = [head, this.overview(system, d)];
+    const parts: Child[] = [head, this.places(system), this.overview(system, d)];
     if (state.error) {
       const retry = h("button", undefined, "Try again");
       retry.type = "button";
@@ -217,6 +221,38 @@ export class SystemPanel {
       parts.push(h("p", "muted loading", "Looking up factions, Powerplay and stations…"));
     }
     this.root.replaceChildren(...parts.filter((p): p is Node | string => !!p));
+  }
+
+  private places(system: SystemInfo): HTMLElement | null {
+    const places = this.deps.places(system.id64, system.name);
+    if (places.length === 0) return null;
+    const list = h("ul", "places");
+    for (const p of places) {
+      const info = categoryInfo(p.category);
+      // Codex sites and carrier hubs are named after their system: say what they are instead.
+      const named = p.name.toLowerCase() !== system.name.toLowerCase();
+      const li = h(
+        "li",
+        "place",
+        h("div", "row", glyph(info.shape), h("span", "name", named ? p.name : p.kind)),
+        named && h("div", "muted small", p.kind),
+        p.summary && h("div", "small", p.summary),
+      );
+      if (p.url) li.append(this.link("More on EDAstro", p.url));
+      list.append(li);
+    }
+    return section(`Points of interest (${places.length})`, h("span", "stamp", "EDAstro"), list);
+  }
+
+  /** A link opened in the default browser (the backend only opens known sites). */
+  private link(label: string, url: string): HTMLAnchorElement {
+    const a = h("a", undefined, label);
+    a.href = url;
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      openExternal(url).catch((err) => this.deps.onError(`Couldn't open the link: ${errorText(err)}`));
+    });
+    return a;
   }
 
   private overview(system: SystemInfo, d: SystemDetails | undefined): HTMLElement {
@@ -345,16 +381,7 @@ export class SystemPanel {
     }
     const nothing = !d.overview && !d.factions && !d.powerplay && d.stations.length === 0 && !d.bodies;
     if (nothing && d.remote.every((r) => r.ok)) notes.push(h("div", "muted small", "No details recorded for this system."));
-    const links = h("div", "links");
-    for (const link of d.links) {
-      const a = h("a", undefined, link.label);
-      a.href = link.url;
-      a.addEventListener("click", (e) => {
-        e.preventDefault();
-        openExternal(link.url).catch((err) => this.deps.onError(`Couldn't open the link: ${errorText(err)}`));
-      });
-      links.append(a);
-    }
+    const links = h("div", "links", ...d.links.map((link) => this.link(link.label, link.url)));
     return h("footer", undefined, ...notes, links);
   }
 }

@@ -1,6 +1,6 @@
 // Settings panel: catalogue folder and rebuilds, journal folder, the
-// populated systems behind the overlay layers, and display preferences
-// (point budget, brightness).
+// populated systems behind the overlay layers, the points of interest, and
+// display preferences (point budget, brightness).
 
 import {
   datasetInfo,
@@ -37,6 +37,10 @@ export interface SettingsDeps {
   populatedStatus: () => string;
   populatedRunning: () => boolean;
   onPopulatedUpdate: () => void;
+  /** Status line for the points of interest. */
+  poiStatus: () => string;
+  poiRunning: () => boolean;
+  onPoiUpdate: () => void;
   /** The update-reminders switch changed (it's saved already). */
   onReminders: (on: boolean) => void;
 }
@@ -72,6 +76,17 @@ export class SettingsPanel {
       $("set-populated-confirm").hidden = true;
       this.deps.onPopulatedUpdate();
       this.renderPopulated();
+    });
+
+    $("set-poi-update").addEventListener("click", () => {
+      if (this.deps.poiRunning()) return this.deps.toasts.show("The points of interest are already downloading.");
+      $("set-poi-confirm").hidden = false;
+    });
+    $("set-poi-cancel").addEventListener("click", () => ($("set-poi-confirm").hidden = true));
+    $("set-poi-go").addEventListener("click", () => {
+      $("set-poi-confirm").hidden = true;
+      this.deps.onPoiUpdate();
+      this.renderPoi();
     });
 
     const reminders = $<HTMLInputElement>("set-update-reminders");
@@ -116,6 +131,7 @@ export class SettingsPanel {
     this.el.hidden = true;
     $("set-rebuild-confirm").hidden = true;
     $("set-populated-confirm").hidden = true;
+    $("set-poi-confirm").hidden = true;
   }
 
   /** Refreshes the populated-systems line (it changes during a download). */
@@ -126,6 +142,16 @@ export class SettingsPanel {
     const missing = status.startsWith("Not downloaded");
     $("set-populated-update").textContent = missing ? "Download from Spansh…" : "Update from Spansh…";
     $<HTMLButtonElement>("set-populated-update").disabled = this.deps.populatedRunning();
+  }
+
+  /** Refreshes the points-of-interest line (it changes during a download). */
+  renderPoi(): void {
+    if (this.el.hidden) return;
+    const status = this.deps.poiStatus();
+    $("set-poi").textContent = status;
+    const missing = status.startsWith("Not downloaded");
+    $("set-poi-update").textContent = missing ? "Download from EDAstro…" : "Update from EDAstro…";
+    $<HTMLButtonElement>("set-poi-update").disabled = this.deps.poiRunning();
   }
 
   private render(s: Settings, status: DataStatus): void {
@@ -153,6 +179,7 @@ export class SettingsPanel {
     $<HTMLSelectElement>("set-details-source").value = s.detailsSource;
     $<HTMLInputElement>("set-update-reminders").checked = s.updateReminders;
     this.renderPopulated();
+    this.renderPoi();
 
     const view = this.deps.view();
     $<HTMLSelectElement>("set-budget").value = String(view.pointBudget);

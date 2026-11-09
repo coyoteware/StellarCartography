@@ -1,6 +1,7 @@
 //! `ingest`: EDSM `systemsWithCoordinates.json.gz` -> `galaxy.sqlite`, octree
 //! tiles and density maps; with `--populated`, Spansh's
-//! `galaxy_populated.json.gz` -> `populated.bin` for the map's overlay layers.
+//! `galaxy_populated.json.gz` -> `populated.bin` for the map's overlay layers;
+//! with `--poi`, EDAstro's catalogues -> `poi.json` for the points of interest.
 //! The app can run the same builds itself; this CLI is for scripting and
 //! development.
 //!
@@ -9,6 +10,7 @@
 //! cargo run --release -p ingest -- --limit 2000000 --out data      # quick subset
 //! cargo run --release -p ingest -- --input dump.json.gz --out data
 //! cargo run --release -p ingest -- --populated --out data          # overlay layers
+//! cargo run --release -p ingest -- --poi --out data                # points of interest
 //! ```
 
 use std::path::PathBuf;
@@ -18,7 +20,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use clap::Parser;
-use ingest::{human_bytes, populated, Input, Options, Phase, EDSM_URL};
+use ingest::{human_bytes, poi, populated, Input, Options, Phase, EDSM_URL};
 
 #[derive(Parser)]
 #[command(about = "Build StellarCartography's galaxy data from the EDSM systems dump")]
@@ -27,6 +29,11 @@ struct Args {
     /// dump instead of the catalogue.
     #[arg(long, conflicts_with_all = ["tee", "sphere"])]
     populated: bool,
+    /// Build poi.json (the points of interest) from EDAstro's catalogues
+    /// instead. With --input, read local copies from that folder (gec.json,
+    /// edsmPOI.csv, fleetcarriers.csv, codex-data.csv).
+    #[arg(long, conflicts_with_all = ["populated", "tee", "sphere", "url", "limit"])]
+    poi: bool,
     /// Read a local copy of the dump instead of streaming it.
     #[arg(long, conflicts_with = "url")]
     input: Option<PathBuf>,
@@ -51,6 +58,9 @@ fn main() -> Result<()> {
     let args = Args::parse();
     if args.populated {
         return build_populated(args);
+    }
+    if args.poi {
+        return build_poi(args);
     }
     let opts = Options {
         input: match args.input {
@@ -128,5 +138,49 @@ fn build_populated(args: Args) -> Result<()> {
         stats.newest_update.as_deref().unwrap_or("unknown"),
         human_bytes(stats.file_bytes)
     );
+    Ok(())
+}
+
+fn build_poi(args: Args) -> Result<()> {
+    let opts = poi::Options {
+        sources: match args.input {
+            Some(dir) => poi::Sources::Dir(dir),
+            None => poi::Sources::Online,
+        },
+        out: args.out,
+    };
+    let mut last_print = Instant::now();
+    let stats = poi::build(
+        &opts,
+        &mut |p| {
+            if last_print.elapsed().as_secs() >= 5 {
+                last_print = Instant::now();
+                let pct = p.bytes_total.map_or(String::new(), |t| format!(" ({:.1}%)", p.bytes_read as f64 * 100.0 / t as f64));
+                eprintln!(
+                    "  [{:4.0}s] {}/{} {}: {}{pct}, {} points of interest",
+                    p.seconds,
+                    p.step,
+                    p.steps,
+                    p.phase.file_name(),
+                    human_bytes(p.bytes_read),
+                    p.pois
+                );
+            }
+        },
+        Arc::new(AtomicBool::new(false)),
+    )?;
+    let counts: Vec<String> = stats.by_category.iter().map(|(k, v)| format!("{k} {v}")).collect();
+    eprintln!(
+        "done in {:.0}s: {} points of interest ({}), {} malformed; {} downloaded, {} written",
+        stats.seconds,
+        stats.pois,
+        counts.join(", "),
+        stats.malformed,
+        human_bytes(stats.bytes_downloaded),
+        human_bytes(stats.file_bytes)
+    );
+    if !stats.unknown_types.is_empty() {
+        eprintln!("unmapped types (filed as sights): {:?}", stats.unknown_types);
+    }
     Ok(())
 }
