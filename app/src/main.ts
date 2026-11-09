@@ -23,6 +23,7 @@ import { View } from "./renderer/view";
 import { CatalogueUi } from "./ui/catalogue";
 import { Hud } from "./ui/hud";
 import { SystemPanel } from "./ui/details";
+import { OverlayUi } from "./ui/overlay";
 import { setupSearch } from "./ui/search";
 import { SettingsPanel } from "./ui/settings";
 import { Toasts, errorText } from "./ui/toast";
@@ -43,7 +44,15 @@ let commanders: CommanderPayload | null = null;
 let selectedFid: string | null = null;
 let visitedCache: { total: number; approximate: number } | null = null;
 const visitedById = new Map<string, VisitedSystem>();
-let viewSettings: ViewSettings = { pointBudget: 5_000_000, exposure: 1, glow: true, stars: true, route: true };
+let viewSettings: ViewSettings = {
+  pointBudget: 5_000_000,
+  exposure: 1,
+  glow: true,
+  stars: true,
+  route: true,
+  overlay: "none",
+  highlights: {},
+};
 let reportedTileFailures = 0;
 
 const systemPanel = new SystemPanel($("info-panel"), {
@@ -56,13 +65,32 @@ const systemPanel = new SystemPanel($("info-panel"), {
   onError: (message) => toasts.error(message, { timeout: 8 }),
 });
 
+const overlay = new OverlayUi({
+  toasts,
+  view: () => viewSettings,
+  onView: (v) => applyView(v),
+  onChange: (layer) => {
+    if (layer && !layer.object.parent) view.overlay.add(layer.object);
+    // Old layers (from before an update) go.
+    for (const child of [...view.overlay.children]) {
+      if (child.name === "populated-systems" && child !== layer?.object) view.overlay.remove(child);
+    }
+    applyDimming();
+    view.wake();
+  },
+});
+
 const settingsPanel = new SettingsPanel({
   toasts,
   view: () => viewSettings,
   onView: (v) => applyView(v),
   onRebuild: () => catalogue.rebuild(),
   buildRunning: () => catalogue.running(),
+  populatedStatus: () => overlay.statusText(),
+  populatedRunning: () => overlay.running,
+  onPopulatedUpdate: () => void overlay.startUpdate(),
 });
+overlay.onStatus = () => settingsPanel.renderPopulated();
 const openSettings = { label: "Settings", run: () => void settingsPanel.open() };
 
 const showGalaxy = () => view.lookAt(edToWorld(SGR_A), 95_000, new THREE.Vector3(0, 0.8, 0.6));
@@ -71,6 +99,13 @@ const showSol = () => view.flyTo(edToWorld(SOL), 120);
 // --- View settings -----------------------------------------------------------
 
 let saveTimer = 0;
+
+/** Under an overlay layer the stars and glow step back so the coloured dots read. */
+function applyDimming(): void {
+  const dim = overlay.active;
+  if (cloud) cloud.gain = dim ? 0.35 : 1;
+  if (glow) glow.brightness = dim ? 0.45 : 1;
+}
 
 /** Applies display preferences to the scene and (debounced) saves them. */
 function applyView(next: ViewSettings, persist = true): void {
@@ -85,6 +120,8 @@ function applyView(next: ViewSettings, persist = true): void {
   $<HTMLInputElement>("layer-glow").checked = next.glow;
   $<HTMLInputElement>("layer-stars").checked = next.stars;
   $<HTMLInputElement>("layer-route").checked = next.route;
+  overlay.sync();
+  applyDimming();
   view.wake();
   if (!persist) return;
   window.clearTimeout(saveTimer);
@@ -119,6 +156,7 @@ async function loadGalaxy(status: Extract<DataStatus, { state: "ready" }>): Prom
     toasts.error(`Couldn't load the galaxy backdrop: ${errorText(g.reason)}`, { action: openSettings });
   }
   applyView(viewSettings, false);
+  void overlay.load();
 }
 
 // --- Commander ---------------------------------------------------------------
@@ -265,10 +303,29 @@ function hideHover(): void {
   canvas.style.cursor = "";
 }
 
+/** The overlay dot under (x, y), when an overlay layer is drawn. */
+function pickOverlay(x: number, y: number, radius: number): number | null {
+  if (!overlay.active || !overlay.layer) return null;
+  return overlay.layer.pick(view.camera, canvas.clientWidth, canvas.clientHeight, x, y, radius);
+}
+
 function hover(): void {
   hoverTimer = 0;
-  if (!hoverAt || !cloud) return;
+  if (!hoverAt) return;
   const { x, y } = hoverAt;
+  // Coloured dots first: they're what the overlay is about.
+  const dot = pickOverlay(x, y, 5);
+  if (dot !== null && overlay.layer && overlay.populated) {
+    hoverRowid = -1;
+    canvas.style.cursor = "pointer";
+    hoverLabel.style.left = `${x}px`;
+    hoverLabel.style.top = `${y}px`;
+    const what = overlay.layer.describe(dot);
+    hoverLabel.textContent = what ? `${overlay.populated.names[dot]} · ${what}` : overlay.populated.names[dot];
+    hoverLabel.hidden = false;
+    return;
+  }
+  if (!cloud) return hideHover();
   const hit = cloud.pick(view.renderer, view.camera, x, y, 5);
   if (!hit) return hideHover();
   canvas.style.cursor = "pointer";
@@ -298,8 +355,12 @@ canvas.addEventListener("pointerdown", (e) => {
   down = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
 });
 canvas.addEventListener("pointerup", async (e) => {
-  if (!down || !cloud || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return;
+  if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return;
   const { x, y } = canvasPoint(e);
+  const dot = pickOverlay(x, y, 6);
+  const dotSystem = dot !== null ? overlay.systemInfo(dot) : null;
+  if (dotSystem) return select(dotSystem, false);
+  if (!cloud) return;
   const t0 = performance.now();
   const hit = cloud.pick(view.renderer, view.camera, x, y);
   console.debug(`pick took ${(performance.now() - t0).toFixed(1)} ms`);
@@ -324,6 +385,7 @@ view.onFrame((now, dt) => {
     if (cloud.busy) view.wake();
   }
   commander.update(now);
+  overlay.layer?.update(view.pixelRatio);
   const stats = cloud?.stats() ?? null;
   if (stats && stats.failed > reportedTileFailures) {
     if (reportedTileFailures === 0) {
@@ -351,6 +413,7 @@ if (import.meta.env.DEV) {
       view,
       commander,
       catalogue,
+      overlay,
       settingsPanel,
       systemPanel,
       get cloud() {

@@ -12,6 +12,7 @@ const MAP_MIN_X = -50000;
 const MAP_MIN_Z = -25000;
 const MAP_SIZE = 100000;
 const HALF_THICKNESS = 4000;
+const INTENSITY = 1 / 900;
 
 const vertexShader = /* glsl */ `
   varying vec3 vWorld;
@@ -99,7 +100,7 @@ export class GalaxyGlow {
         uBoxMin: { value: centre.clone().sub(half) },
         uBoxMax: { value: centre.clone().add(half) },
         uCore: { value: edToWorld(SGR_A) },
-        uIntensity: { value: 1 / 900 },
+        uIntensity: { value: INTENSITY },
       },
       side: THREE.BackSide,
       transparent: true,
@@ -116,5 +117,10 @@ export class GalaxyGlow {
 
   set intensity(v: number) {
     this.material.uniforms.uIntensity.value = v;
+  }
+
+  /** Fraction of the normal brightness (1 = as designed); lowered under the overlay layers. */
+  set brightness(f: number) {
+    this.material.uniforms.uIntensity.value = INTENSITY * f;
   }
 }

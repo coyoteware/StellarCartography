@@ -1,6 +1,8 @@
 //! Builds StellarCartography's galaxy data from the EDSM
 //! `systemsWithCoordinates.json.gz` dump: `galaxy.sqlite`, octree tiles and
 //! density maps. Used by the `ingest` CLI and by the app's build flow.
+//! [`populated`] builds the separate populated-systems file behind the map's
+//! overlay layers, from Spansh.
 //!
 //! The dump can be streamed straight from EDSM, so the 3.7 GB file never has
 //! to be kept on disk. Everything is written to a staging folder inside the
@@ -8,6 +10,7 @@
 //! has succeeded, so a failed or cancelled build leaves the old data alone.
 
 mod density;
+pub mod populated;
 mod source;
 
 use std::io::{BufRead, BufReader};

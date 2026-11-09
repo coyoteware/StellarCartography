@@ -1,7 +1,8 @@
 //! Tauri backend: serves the generated galaxy data to the web view, answers
 //! system lookups from `galaxy.sqlite`, tails the player journal, keeps the
-//! user's settings, runs the catalogue build (first run and rebuilds), and
-//! assembles per-system details from the journal and online sources.
+//! user's settings, runs the catalogue build (first run and rebuilds) and
+//! the populated-systems download behind the overlay layers, and assembles
+//! per-system details from the journal and online sources.
 
 mod data;
 mod details;
@@ -36,6 +37,7 @@ struct AppState {
     data: RwLock<DataSlot>,
     commander: Mutex<Option<JournalSource>>,
     build: Mutex<Option<BuildJob>>,
+    populated: Mutex<Option<PopulatedJob>>,
     online: Online,
 }
 
@@ -73,6 +75,12 @@ struct BuildJob {
     dir: PathBuf,
     cancel: Arc<AtomicBool>,
     last: Option<ingest::Progress>,
+}
+
+/// A download of Spansh's populated-systems dump into `populated.bin`.
+struct PopulatedJob {
+    cancel: Arc<AtomicBool>,
+    last: Option<ingest::populated::Progress>,
 }
 
 #[derive(Serialize)]
@@ -124,6 +132,22 @@ struct BuildStatus {
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct BuildDone {
+    ok: bool,
+    cancelled: bool,
+    error: Option<String>,
+    systems: Option<u64>,
+    seconds: Option<f64>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PopulatedStatus {
+    progress: Option<ingest::populated::Progress>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PopulatedDone {
     ok: bool,
     cancelled: bool,
     error: Option<String>,
@@ -546,6 +570,88 @@ fn run_build(app: AppHandle, dir: PathBuf, limit: Option<u64>, cancel: Arc<Atomi
     let _ = app.emit("build-done", done);
 }
 
+// --- Populated systems (overlay layers) --------------------------------------
+
+/// Downloads Spansh's populated-systems dump into the current data folder's
+/// `populated.bin`. Progress arrives as `populated-progress` events and the
+/// end as `populated-done`. Independent of catalogue builds: those never
+/// touch `populated.bin`.
+#[tauri::command]
+fn start_populated_update(app: AppHandle, state: State<AppState>) -> CmdResult<()> {
+    let mut job = state.populated.lock().map_err(err)?;
+    if job.is_some() {
+        return Err("The populated systems are already being downloaded.".into());
+    }
+    let dir = {
+        let slot = state.data.read().map_err(err)?;
+        if slot.dataset.is_none() {
+            return Err("Build the galaxy catalogue first.".into());
+        }
+        slot.dir.clone()
+    };
+    let cancel = Arc::new(AtomicBool::new(false));
+    *job = Some(PopulatedJob { cancel: cancel.clone(), last: None });
+    let spawned = std::thread::Builder::new()
+        .name("populated-update".into())
+        .spawn(move || run_populated_update(app, dir, cancel));
+    if let Err(e) = spawned {
+        *job = None;
+        return Err(err(e));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn cancel_populated_update(state: State<AppState>) -> CmdResult<bool> {
+    let job = state.populated.lock().map_err(err)?;
+    if let Some(job) = job.as_ref() {
+        job.cancel.store(true, Ordering::Relaxed);
+    }
+    Ok(job.is_some())
+}
+
+#[tauri::command]
+fn populated_update_status(state: State<AppState>) -> CmdResult<Option<PopulatedStatus>> {
+    let job = state.populated.lock().map_err(err)?;
+    Ok(job.as_ref().map(|j| PopulatedStatus { progress: j.last.clone() }))
+}
+
+fn run_populated_update(app: AppHandle, dir: PathBuf, cancel: Arc<AtomicBool>) {
+    let state = app.state::<AppState>();
+    let result = ingest::populated::build(
+        &ingest::populated::Options::spansh(&dir),
+        &mut |p| {
+            if let Ok(mut job) = state.populated.lock() {
+                if let Some(job) = job.as_mut() {
+                    job.last = Some(p.clone());
+                }
+            }
+            let _ = app.emit("populated-progress", p);
+        },
+        cancel.clone(),
+    );
+    let cancelled = cancel.load(Ordering::Relaxed);
+    let done = match result {
+        Ok(stats) => {
+            eprintln!(
+                "populated systems: {} in {:.0}s ({} malformed), {} bytes",
+                stats.systems, stats.seconds, stats.malformed, stats.file_bytes
+            );
+            PopulatedDone { ok: true, cancelled: false, error: None, systems: Some(stats.systems), seconds: Some(stats.seconds) }
+        }
+        Err(e) => {
+            if !cancelled {
+                eprintln!("populated systems download failed: {e:#}");
+            }
+            PopulatedDone { ok: false, cancelled, error: (!cancelled).then(|| format!("{e:#}")), systems: None, seconds: None }
+        }
+    };
+    if let Ok(mut job) = state.populated.lock() {
+        *job = None;
+    }
+    let _ = app.emit("populated-done", done);
+}
+
 // --- Data scheme and journal watcher -----------------------------------------
 
 /// Maps a request path onto a file inside the data dir, refusing anything
@@ -637,6 +743,9 @@ pub fn run() {
             set_details_source,
             system_details,
             open_external,
+            start_populated_update,
+            cancel_populated_update,
+            populated_update_status,
         ])
         .setup(|app| {
             let paths = app.path();
@@ -654,6 +763,7 @@ pub fn run() {
                 settings: Mutex::new(settings),
                 commander: Mutex::new(commander),
                 build: Mutex::new(None),
+                populated: Mutex::new(None),
                 online,
             });
             spawn_journal_watcher(app.handle().clone());

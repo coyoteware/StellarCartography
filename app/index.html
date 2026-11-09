@@ -27,6 +27,13 @@
         <label><input type="checkbox" id="layer-glow" checked /> Galaxy glow</label>
         <label><input type="checkbox" id="layer-stars" checked /> Known systems</label>
         <label><input type="checkbox" id="layer-route" checked /> Travel history</label>
+        <div id="overlay">
+          <label class="overlay-pick">
+            Colour systems by
+            <select id="overlay-select"></select>
+          </label>
+          <div id="overlay-body" hidden></div>
+        </div>
         <div id="commander" hidden>
           <select id="commander-select"></select>
           <div id="commander-location"></div>
@@ -129,6 +136,27 @@
           Clicking a star shows its factions, Powerplay and stations. Systems you've visited use your journal; others
           are looked up online, falling back to the other site if the first is down. Spansh has Powerplay and landing
           pads, EDSM doesn't. Answers are cached for an hour.
+        </p>
+      </section>
+      <section>
+        <h2>Populated systems</h2>
+        <div id="set-populated"></div>
+        <div class="buttons">
+          <button id="set-populated-update" type="button">Download from Spansh…</button>
+        </div>
+        <div id="set-populated-confirm" class="confirm" hidden>
+          <p>
+            Downloads Spansh's populated-systems dump (about 4.7 GB, not kept) and keeps about 17 MB of it for the map
+            layers. Takes about 5 minutes; the map stays usable meanwhile.
+          </p>
+          <div class="buttons">
+            <button id="set-populated-go" type="button" class="primary">Download</button>
+            <button id="set-populated-cancel" type="button">Cancel</button>
+          </div>
+        </div>
+        <p class="muted small">
+          Colours the map by population, allegiance, government, economy, security, Powerplay or a minor faction
+          (Layers → Colour systems by). Powerplay moves weekly; update whenever you like.
         </p>
       </section>
       <section>

@@ -1,5 +1,6 @@
-// Settings panel: catalogue folder and rebuilds, journal folder, and display
-// preferences (point budget, brightness).
+// Settings panel: catalogue folder and rebuilds, journal folder, the
+// populated systems behind the overlay layers, and display preferences
+// (point budget, brightness).
 
 import {
   datasetInfo,
@@ -31,6 +32,10 @@ export interface SettingsDeps {
   onView: (view: ViewSettings) => void;
   onRebuild: () => Promise<void>;
   buildRunning: () => Promise<boolean>;
+  /** Status line for the populated systems. */
+  populatedStatus: () => string;
+  populatedRunning: () => boolean;
+  onPopulatedUpdate: () => void;
 }
 
 export class SettingsPanel {
@@ -53,6 +58,17 @@ export class SettingsPanel {
       $("set-rebuild-confirm").hidden = true;
       this.close();
       void this.deps.onRebuild();
+    });
+
+    $("set-populated-update").addEventListener("click", () => {
+      if (this.deps.populatedRunning()) return this.deps.toasts.show("The populated systems are already downloading.");
+      $("set-populated-confirm").hidden = false;
+    });
+    $("set-populated-cancel").addEventListener("click", () => ($("set-populated-confirm").hidden = true));
+    $("set-populated-go").addEventListener("click", () => {
+      $("set-populated-confirm").hidden = true;
+      this.deps.onPopulatedUpdate();
+      this.renderPopulated();
     });
 
     const detailsSource = $<HTMLSelectElement>("set-details-source");
@@ -79,8 +95,8 @@ export class SettingsPanel {
     try {
       const [settings, status] = await Promise.all([getSettings(), datasetInfo()]);
       this.settings = settings;
-      this.render(settings, status);
       this.el.hidden = false;
+      this.render(settings, status);
     } catch (e) {
       this.deps.toasts.error(`Couldn't load the settings: ${errorText(e)}`);
     }
@@ -89,6 +105,17 @@ export class SettingsPanel {
   close(): void {
     this.el.hidden = true;
     $("set-rebuild-confirm").hidden = true;
+    $("set-populated-confirm").hidden = true;
+  }
+
+  /** Refreshes the populated-systems line (it changes during a download). */
+  renderPopulated(): void {
+    if (this.el.hidden) return;
+    const status = this.deps.populatedStatus();
+    $("set-populated").textContent = status;
+    const missing = status.startsWith("Not downloaded");
+    $("set-populated-update").textContent = missing ? "Download from Spansh…" : "Update from Spansh…";
+    $<HTMLButtonElement>("set-populated-update").disabled = this.deps.populatedRunning();
   }
 
   private render(s: Settings, status: DataStatus): void {
@@ -113,6 +140,7 @@ export class SettingsPanel {
     $("set-journal-reset").hidden = !s.journalDirCustom;
 
     $<HTMLSelectElement>("set-details-source").value = s.detailsSource;
+    this.renderPopulated();
 
     const view = this.deps.view();
     $<HTMLSelectElement>("set-budget").value = String(view.pointBudget);

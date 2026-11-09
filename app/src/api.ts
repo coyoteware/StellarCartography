@@ -21,6 +21,10 @@ export interface ViewSettings {
   glow: boolean;
   stars: boolean;
   route: boolean;
+  /** What colours the populated-systems overlay (an `OverlayId`, see overlays.ts); "none" hides it. */
+  overlay: string;
+  /** Per overlay, the categories picked out in colour; "" marks an empty colour slot. */
+  highlights: Record<string, string[]>;
 }
 
 /** Where the details panel looks systems up online; the other site is the fallback. */
@@ -61,7 +65,8 @@ export interface BuildDone {
 }
 
 export interface SystemInfo {
-  rowid: number;
+  /** Row in the catalogue; null for a system picked from the populated-systems overlay. */
+  rowid: number | null;
   /** Kept as a string: addresses can exceed Number.MAX_SAFE_INTEGER. */
   id64: string | null;
   name: string;
@@ -235,6 +240,36 @@ export const setDetailsSource = (source: OnlineSource) => invoke<void>("set_deta
 export const startBuild = (dir?: string, limit?: number) => invoke<string>("start_build", { dir, limit });
 export const cancelBuild = () => invoke<boolean>("cancel_build");
 export const buildStatus = () => invoke<BuildStatus | null>("build_status");
+
+/** Progress of the populated-systems download (crates/ingest/src/populated.rs). */
+export interface PopulatedProgress {
+  bytesRead: number;
+  bytesTotal: number | null;
+  systems: number;
+  seconds: number;
+}
+
+export interface PopulatedDone {
+  ok: boolean;
+  cancelled: boolean;
+  error: string | null;
+  systems: number | null;
+  seconds: number | null;
+}
+
+/** Downloads Spansh's populated-systems dump into the data folder's populated.bin. */
+export const startPopulatedUpdate = () => invoke<void>("start_populated_update");
+export const cancelPopulatedUpdate = () => invoke<boolean>("cancel_populated_update");
+/** Non-null while a download runs. */
+export const populatedUpdateStatus = () => invoke<{ progress: PopulatedProgress | null } | null>("populated_update_status");
+
+export function onPopulatedProgress(handler: (p: PopulatedProgress) => void): Promise<UnlistenFn> {
+  return listen<PopulatedProgress>("populated-progress", (e) => handler(e.payload));
+}
+
+export function onPopulatedDone(handler: (d: PopulatedDone) => void): Promise<UnlistenFn> {
+  return listen<PopulatedDone>("populated-done", (e) => handler(e.payload));
+}
 
 export function onCommanderJump(handler: (fid: string, jump: Jump) => void): Promise<UnlistenFn> {
   return listen<{ fid: string; jump: Jump }>("commander-jump", (e) => handler(e.payload.fid, e.payload.jump));

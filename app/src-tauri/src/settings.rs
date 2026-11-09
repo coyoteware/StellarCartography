@@ -1,6 +1,7 @@
 //! User settings, kept as JSON in the app's config folder
 //! (`%APPDATA%\io.github.stellarcartography.viewer\settings.json` on Windows).
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -29,11 +30,23 @@ pub struct ViewSettings {
     pub glow: bool,
     pub stars: bool,
     pub route: bool,
+    /// What colours the populated-systems overlay ("population", "power", ...); "none" hides it.
+    pub overlay: String,
+    /// Per overlay, the categories picked out in colour (a minor faction's name for "faction").
+    pub highlights: BTreeMap<String, Vec<String>>,
 }
 
 impl Default for ViewSettings {
     fn default() -> Self {
-        Self { point_budget: 5_000_000, exposure: 1.0, glow: true, stars: true, route: true }
+        Self {
+            point_budget: 5_000_000,
+            exposure: 1.0,
+            glow: true,
+            stars: true,
+            route: true,
+            overlay: "none".into(),
+            highlights: BTreeMap::new(),
+        }
     }
 }
 
@@ -74,7 +87,12 @@ mod tests {
 
         let s = Settings {
             data_dir: Some(PathBuf::from(r"D:\galaxy")),
-            view: ViewSettings { point_budget: 10_000_000, ..Default::default() },
+            view: ViewSettings {
+                point_budget: 10_000_000,
+                overlay: "power".into(),
+                highlights: BTreeMap::from([("power".into(), vec!["Jerome Archer".into()])]),
+                ..Default::default()
+            },
             ..Default::default()
         };
         s.save(&path).unwrap();
@@ -85,6 +103,8 @@ mod tests {
         let partial = Settings::load(&path);
         assert_eq!(partial.view.exposure, 1.5);
         assert_eq!(partial.view.point_budget, 5_000_000);
+        assert_eq!(partial.view.overlay, "none", "files from before the overlay layers");
+        assert!(partial.view.highlights.is_empty());
         assert_eq!(partial.details_source, OnlineSource::Spansh);
 
         std::fs::write(&path, r#"{"detailsSource":"off"}"#).unwrap();

@@ -15,7 +15,7 @@ dump on first run and rebuilt from Settings whenever you like.
 | Path | What |
 | --- | --- |
 | `crates/galaxy-core` | Shared Rust: id64 decoding, octree tile format, journal parser |
-| `crates/ingest` | Library + CLI: EDSM dump → `galaxy.sqlite`, `tiles/`, `density.png` (the app runs the same build) |
+| `crates/ingest` | Library + CLI: EDSM dump → `galaxy.sqlite`, `tiles/`, `density.png`; Spansh dump → `populated.bin` (the app runs the same builds) |
 | `app/` | Vite + TypeScript + three.js frontend |
 | `app/src-tauri` | Tauri backend: serves tiles, system search, journal watcher, settings, catalogue builds |
 | `data/` | Generated data (gitignored) |
@@ -59,6 +59,33 @@ The journal folder defaults to
 in Settings, or override it with `ED_JOURNAL_DIR`. Settings are saved in
 `%APPDATA%\io.github.stellarcartography.viewer\settings.json`.
 
+## Map layers
+
+Layers → **Colour systems by** draws every populated system as a coloured dot
+over the stars, which dim to make room:
+- **Population**: one blue ramp, log scale from 1 thousand to 10 billion; bigger dots are more populous.
+- **Allegiance**, **Government**, **Economy** and **Powerplay power**: up to three
+  values in colour at once, everything else grey. Click a legend row to colour or
+  grey it; the choice is saved. In the Powerplay layer, Fortified systems are drawn
+  bigger and Strongholds biggest.
+- **Security** and **Powerplay state**: one hue in steps, lowest darkest. Click a
+  legend row to hide or show that level.
+- **Minor faction**: find a faction by name to see every system it's in, coloured
+  by influence, with the systems it controls drawn bigger.
+
+Hovering a dot shows the system and its value; clicking it opens the system's
+details. Only three colours are used at a time because, with dots side by side,
+more than three hues can't all be told apart by colour-blind viewers.
+
+The layers come from [Spansh](https://spansh.co.uk)'s
+`galaxy_populated.json.gz`: the only dump that names each system's controlling
+power. EDSM's Powerplay dump lists the powers present without saying which one
+controls. The dump is about 4.7 GB. The app streams it, keeps about 17 MB as
+`populated.bin` in the data folder, and needs about 5 minutes (mostly download).
+The layers panel offers the first download. Settings → "Update from Spansh…"
+refreshes it whenever you like (Powerplay moves weekly). Catalogue rebuilds don't
+touch it.
+
 ## System details
 
 Clicking a star opens a panel with what's known about the system:
@@ -91,6 +118,13 @@ For a quick development dataset, `--limit 2000000` stops after the first 2M
 records. `--sphere x,y,z,radius` keeps only systems inside a sphere, and
 `--input file.json.gz` reads a local copy instead of downloading.
 
+`--populated` builds `populated.bin` for the map layers from Spansh instead
+(`--input` and `--limit` work there too):
+
+```bash
+cargo run --release -p ingest -- --populated --out data
+```
+
 ## Installer
 
 ```bash
@@ -121,6 +155,7 @@ from the Actions tab with "Run workflow".
 
 - System catalogue: [EDSM](https://www.edsm.net) nightly dump `systemsWithCoordinates.json.gz`.
 - System details: [Spansh](https://spansh.co.uk) and [EDSM](https://www.edsm.net) APIs, looked up per system on demand.
+- Map layers: [Spansh](https://spansh.co.uk) dump `galaxy_populated.json.gz`.
 - The galaxy glow ray-marches a density map built from id64 boxel indices. The
   idea comes from [spansh/elite-galaxy-map](https://github.com/spansh/elite-galaxy-map);
   the shader and data here are our own.
