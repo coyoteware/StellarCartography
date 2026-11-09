@@ -551,7 +551,7 @@ mod tests {
     }
 
     fn u32s(b: &[u8]) -> Vec<u32> {
-        b.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect()
+        b.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes(*c)).collect()
     }
 
     #[test]
@@ -574,9 +574,9 @@ mod tests {
         let h = read_header(&bytes).unwrap();
         // Smallest population first.
         assert_eq!(h.names, ["Quiet", "LHS 3558", "Sol"]);
-        let id64: Vec<u64> = column(&bytes, &h, "id64").chunks_exact(8).map(|c| u64::from_le_bytes(c.try_into().unwrap())).collect();
+        let id64: Vec<u64> = column(&bytes, &h, "id64").as_chunks::<8>().0.iter().map(|c| u64::from_le_bytes(*c)).collect();
         assert_eq!(id64, [42, 5068732573097, 10477373803]);
-        let pos: Vec<f32> = column(&bytes, &h, "pos").chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect();
+        let pos: Vec<f32> = column(&bytes, &h, "pos").as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect();
         assert_eq!(&pos[3..6], &[-30.5, 12.25, 7.125]);
         let population = f64::from_le_bytes(column(&bytes, &h, "population")[16..24].try_into().unwrap());
         assert_eq!(population, 18320926115.0);
@@ -614,7 +614,7 @@ mod tests {
         assert_eq!(h.factions[controlling[2] as usize], "Mother Gaia");
         assert_eq!(h.factions[ids[2] as usize], "Mother Gaia");
         let influence: Vec<u16> =
-            column(&bytes, &h, "factionInfluence").chunks_exact(2).map(|c| u16::from_le_bytes(c.try_into().unwrap())).collect();
+            column(&bytes, &h, "factionInfluence").as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
         assert_eq!(influence, [10_000, 1765, 3001]);
     }
 
