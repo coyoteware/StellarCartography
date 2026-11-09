@@ -33,6 +33,10 @@ export interface ViewSettings {
   overlay: string;
   /** Per overlay, the categories picked out in colour; "" marks an empty colour slot. */
   highlights: Record<string, string[]>;
+  /** Draw the points-of-interest markers. */
+  poi: boolean;
+  /** Point-of-interest categories switched off (a `PoiCategory` id, see poi.ts). */
+  poiHidden: string[];
 }
 
 /** Where the details panel looks systems up online; the other site is the fallback. */
@@ -289,6 +293,41 @@ export function onPopulatedProgress(handler: (p: PopulatedProgress) => void): Pr
 
 export function onPopulatedDone(handler: (d: PopulatedDone) => void): Promise<UnlistenFn> {
   return listen<PopulatedDone>("populated-done", (e) => handler(e.payload));
+}
+
+/** Progress of the points-of-interest download (crates/ingest/src/poi.rs). */
+export interface PoiProgress {
+  phase: "gec" | "edsm" | "carriers" | "codex";
+  /** 1-based position of `phase` among `steps` files. */
+  step: number;
+  steps: number;
+  /** Bytes of the current file read so far. */
+  bytesRead: number;
+  bytesTotal: number | null;
+  pois: number;
+  seconds: number;
+}
+
+export interface PoiDone {
+  ok: boolean;
+  cancelled: boolean;
+  error: string | null;
+  pois: number | null;
+  seconds: number | null;
+}
+
+/** Downloads EDAstro's catalogues into the data folder's poi.json. */
+export const startPoiUpdate = () => invoke<void>("start_poi_update");
+export const cancelPoiUpdate = () => invoke<boolean>("cancel_poi_update");
+/** Non-null while a download runs. */
+export const poiUpdateStatus = () => invoke<{ progress: PoiProgress | null } | null>("poi_update_status");
+
+export function onPoiProgress(handler: (p: PoiProgress) => void): Promise<UnlistenFn> {
+  return listen<PoiProgress>("poi-progress", (e) => handler(e.payload));
+}
+
+export function onPoiDone(handler: (d: PoiDone) => void): Promise<UnlistenFn> {
+  return listen<PoiDone>("poi-done", (e) => handler(e.payload));
 }
 
 export function onCommanderJump(handler: (fid: string, jump: Jump) => void): Promise<UnlistenFn> {

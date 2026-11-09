@@ -52,6 +52,13 @@ pub fn populated_needs(out: &Path) -> Needs {
     Needs { data: (2 * current).max(50 << 20) + (200 << 20), temp: 0 }
 }
 
+/// What a points-of-interest update into `out` will need: the new file is
+/// written beside the old one. Nothing raw is kept, so it's small.
+pub fn poi_needs(out: &Path) -> Needs {
+    let current = std::fs::metadata(out.join(crate::poi::FILE_NAME)).map_or(0, |m| m.len());
+    Needs { data: (2 * current).max(20 << 20) + (50 << 20), temp: 0 }
+}
+
 /// The previous build's output sizes, from its `ingest-stats.json`.
 fn previous_outputs(out: &Path) -> Option<u64> {
     #[derive(Deserialize)]

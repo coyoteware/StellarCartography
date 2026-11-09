@@ -5,11 +5,11 @@
 // background colour, so neighbours stay apart where they overlap; on small
 // dots the ring would swallow the colour.
 //
-// Picking is on the CPU: projecting ~150k points takes a millisecond or two,
-// cheap next to the GPU id pass the star tiles need.
+// Picking is on the CPU (pick.ts).
 
 import * as THREE from "three";
 import type { OverlayStyle } from "../overlays";
+import { pickPoint } from "./pick";
 import type { PopulatedData } from "./populated-data";
 
 /** Distance (ly) at which dots are drawn at their base size; nearer they grow, further they shrink. */
@@ -57,7 +57,6 @@ export class PopulatedLayer {
   /** World positions (z flipped, see coords.ts). */
   private readonly world: Float32Array;
   private style: OverlayStyle | null = null;
-  private readonly matrix = new THREE.Matrix4();
 
   constructor(readonly data: PopulatedData) {
     this.world = new Float32Array(data.pos.length);
@@ -119,31 +118,8 @@ export class PopulatedLayer {
   pick(camera: THREE.PerspectiveCamera, width: number, height: number, x: number, y: number, radius = 6): number | null {
     const style = this.style;
     if (!this.object.visible || !style || style.order.length === 0) return null;
-    const e = this.matrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).elements;
-    const w = this.world;
-    let covering = -1;
-    let nearest = -1;
-    let nearestD = radius * radius;
-    for (const i of style.order) {
-      const px = w[i * 3];
-      const py = w[i * 3 + 1];
-      const pz = w[i * 3 + 2];
-      const cw = e[3] * px + e[7] * py + e[11] * pz + e[15];
-      if (cw <= 0) continue;
-      const sx = ((e[0] * px + e[4] * py + e[8] * pz + e[12]) / cw + 1) * 0.5 * width;
-      const sy = (1 - (e[1] * px + e[5] * py + e[9] * pz + e[13]) / cw) * 0.5 * height;
-      const d = (sx - x) ** 2 + (sy - y) ** 2;
-      // For a perspective camera clip w is the view depth, as in the shader.
-      const r = (style.size[i] * Math.min(Math.max(SIZE_REF_DISTANCE / cw, MIN_ZOOM), MAX_ZOOM)) / 2;
-      // Later dots draw on top, so the last one covering the point wins.
-      if (d <= r * r) covering = i;
-      else if (d <= nearestD) {
-        nearestD = d;
-        nearest = i;
-      }
-    }
-    const hit = covering >= 0 ? covering : nearest;
-    return hit >= 0 ? hit : null;
+    const zoom = (depth: number) => Math.min(Math.max(SIZE_REF_DISTANCE / depth, MIN_ZOOM), MAX_ZOOM);
+    return pickPoint(camera, width, height, this.world, style.order, (i, depth) => (style.size[i] * zoom(depth)) / 2, x, y, radius);
   }
 
   /** Hover text for system i under the current style. */

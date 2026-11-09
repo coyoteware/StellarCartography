@@ -48,6 +48,10 @@ pub struct ViewSettings {
     pub overlay: String,
     /// Per overlay, the categories picked out in colour (a minor faction's name for "faction").
     pub highlights: BTreeMap<String, Vec<String>>,
+    /// Draw the points-of-interest markers.
+    pub poi: bool,
+    /// Point-of-interest categories switched off, in the directory and on the map.
+    pub poi_hidden: Vec<String>,
 }
 
 impl Default for ViewSettings {
@@ -60,6 +64,9 @@ impl Default for ViewSettings {
             route: true,
             overlay: "none".into(),
             highlights: BTreeMap::new(),
+            poi: true,
+            // Thousands of catalogue entries: they'd crowd out everything else.
+            poi_hidden: vec!["planetaryNebula".into()],
         }
     }
 }
@@ -105,6 +112,8 @@ mod tests {
                 point_budget: 10_000_000,
                 overlay: "power".into(),
                 highlights: BTreeMap::from([("power".into(), vec!["Jerome Archer".into()])]),
+                poi: false,
+                poi_hidden: vec![],
                 ..Default::default()
             },
             ..Default::default()
@@ -119,6 +128,8 @@ mod tests {
         assert_eq!(partial.view.point_budget, 5_000_000);
         assert_eq!(partial.view.overlay, "none", "files from before the overlay layers");
         assert!(partial.view.highlights.is_empty());
+        assert!(partial.view.poi, "files from before the points of interest");
+        assert_eq!(partial.view.poi_hidden, ["planetaryNebula"]);
         assert_eq!(partial.details_source, OnlineSource::Spansh);
 
         assert!(partial.update_reminders, "reminders are on unless turned off");

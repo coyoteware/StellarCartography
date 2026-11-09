@@ -1,8 +1,9 @@
 //! Tauri backend: serves the generated galaxy data to the web view, answers
 //! system lookups from `galaxy.sqlite`, tails the player journal, keeps the
-//! user's settings, runs the catalogue build (first run and rebuilds) and
-//! the populated-systems download behind the overlay layers, and assembles
-//! per-system details from the journal and online sources.
+//! user's settings, runs the catalogue build (first run and rebuilds), the
+//! populated-systems download behind the overlay layers and the
+//! points-of-interest download, and assembles per-system details from the
+//! journal and online sources.
 
 mod data;
 mod details;
@@ -38,6 +39,7 @@ struct AppState {
     commander: Mutex<Option<JournalSource>>,
     build: Mutex<Option<BuildJob>>,
     populated: Mutex<Option<PopulatedJob>>,
+    poi: Mutex<Option<PoiJob>>,
     online: Online,
 }
 
@@ -81,6 +83,12 @@ struct BuildJob {
 struct PopulatedJob {
     cancel: Arc<AtomicBool>,
     last: Option<ingest::populated::Progress>,
+}
+
+/// A download of EDAstro's catalogues into `poi.json`.
+struct PoiJob {
+    cancel: Arc<AtomicBool>,
+    last: Option<ingest::poi::Progress>,
 }
 
 #[derive(Serialize)]
@@ -153,6 +161,22 @@ struct PopulatedDone {
     cancelled: bool,
     error: Option<String>,
     systems: Option<u64>,
+    seconds: Option<f64>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PoiStatus {
+    progress: Option<ingest::poi::Progress>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct PoiDone {
+    ok: bool,
+    cancelled: bool,
+    error: Option<String>,
+    pois: Option<u64>,
     seconds: Option<f64>,
 }
 
@@ -378,7 +402,7 @@ fn use_data_dir(state: State<AppState>, dir: String) -> CmdResult<DataStatus> {
     let mut settings = state.settings.lock().map_err(err)?;
     settings.data_dir = Some(found.clone());
     save_settings(&state, &settings)?;
-    carry_populated(&slot.dir, &found);
+    carry_files(&slot.dir, &found);
     *slot = next;
     Ok(slot.status())
 }
@@ -436,20 +460,28 @@ fn disk_space(dir: String) -> CmdResult<DiskSpace> {
     })
 }
 
-/// Copies `populated.bin` into a new data folder that has none, so the map
-/// layers survive a change of folder. Best effort: a failure only means the
-/// layers need downloading again.
-fn carry_populated(from: &Path, to: &Path) {
-    let name = ingest::populated::FILE_NAME;
-    let (src, dst) = (from.join(name), to.join(name));
-    if from == to || !src.is_file() || dst.exists() {
+/// Downloaded datasets that live in the data folder but aren't part of a
+/// catalogue build.
+const CARRIED_FILES: [&str; 2] = [ingest::populated::FILE_NAME, ingest::poi::FILE_NAME];
+
+/// Copies the map layers' `populated.bin` and the points of interest into a
+/// new data folder that lacks them, so they survive a change of folder. Best
+/// effort: a failure only means downloading them again.
+fn carry_files(from: &Path, to: &Path) {
+    if from == to {
         return;
     }
-    let partial = to.join(format!("{name}.partial"));
-    let copied = std::fs::copy(&src, &partial).and_then(|_| std::fs::rename(&partial, &dst));
-    if let Err(e) = copied {
-        let _ = std::fs::remove_file(&partial);
-        eprintln!("couldn't copy {} to {}: {e}", src.display(), to.display());
+    for name in CARRIED_FILES {
+        let (src, dst) = (from.join(name), to.join(name));
+        if !src.is_file() || dst.exists() {
+            continue;
+        }
+        let partial = to.join(format!("{name}.partial"));
+        let copied = std::fs::copy(&src, &partial).and_then(|_| std::fs::rename(&partial, &dst));
+        if let Err(e) = copied {
+            let _ = std::fs::remove_file(&partial);
+            eprintln!("couldn't copy {} to {}: {e}", src.display(), to.display());
+        }
     }
 }
 
@@ -488,12 +520,12 @@ async fn system_details(
 }
 
 /// Sites the details panel links to; nothing else is opened.
-const EXTERNAL_SITES: [&str; 3] = ["https://spansh.co.uk/", "https://inara.cz/", "https://www.edsm.net/"];
+const EXTERNAL_SITES: [&str; 4] = ["https://spansh.co.uk/", "https://inara.cz/", "https://www.edsm.net/", "https://edastro.com/"];
 
 #[tauri::command]
 fn open_external(app: AppHandle, url: String) -> CmdResult<()> {
     if !EXTERNAL_SITES.iter().any(|site| url.starts_with(site)) {
-        return Err(format!("not opening {url}: only Spansh, Inara and EDSM links are allowed"));
+        return Err(format!("not opening {url}: only Spansh, Inara, EDSM and EDAstro links are allowed"));
     }
     app.opener().open_url(url, None::<&str>).map_err(err)
 }
@@ -588,7 +620,7 @@ fn run_build(app: AppHandle, dir: PathBuf, limit: Option<u64>, cancel: Arc<Atomi
                 (Err(_), origin) => (slot.dir.clone(), origin),
             };
             if result.is_ok() {
-                carry_populated(&slot.dir, &dir);
+                carry_files(&slot.dir, &dir);
             }
             *slot = DataSlot::load(next_dir, origin);
             if result.is_ok() && origin == DirOrigin::Settings {
@@ -709,6 +741,86 @@ fn run_populated_update(app: AppHandle, dir: PathBuf, cancel: Arc<AtomicBool>) {
     let _ = app.emit("populated-done", done);
 }
 
+// --- Points of interest ------------------------------------------------------
+
+/// Downloads EDAstro's catalogues into the current data folder's `poi.json`.
+/// Progress arrives as `poi-progress` events and the end as `poi-done`.
+/// Independent of the other builds and downloads.
+#[tauri::command]
+fn start_poi_update(app: AppHandle, state: State<AppState>) -> CmdResult<()> {
+    let mut job = state.poi.lock().map_err(err)?;
+    if job.is_some() {
+        return Err("The points of interest are already being downloaded.".into());
+    }
+    let dir = {
+        let slot = state.data.read().map_err(err)?;
+        if slot.dataset.is_none() {
+            return Err("Build the galaxy catalogue first.".into());
+        }
+        slot.dir.clone()
+    };
+    ingest::space::check(&dir, ingest::space::poi_needs(&dir), "the points-of-interest update").map_err(|e| format!("{e:#}"))?;
+    let cancel = Arc::new(AtomicBool::new(false));
+    *job = Some(PoiJob { cancel: cancel.clone(), last: None });
+    let spawned = std::thread::Builder::new().name("poi-update".into()).spawn(move || run_poi_update(app, dir, cancel));
+    if let Err(e) = spawned {
+        *job = None;
+        return Err(err(e));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn cancel_poi_update(state: State<AppState>) -> CmdResult<bool> {
+    let job = state.poi.lock().map_err(err)?;
+    if let Some(job) = job.as_ref() {
+        job.cancel.store(true, Ordering::Relaxed);
+    }
+    Ok(job.is_some())
+}
+
+#[tauri::command]
+fn poi_update_status(state: State<AppState>) -> CmdResult<Option<PoiStatus>> {
+    let job = state.poi.lock().map_err(err)?;
+    Ok(job.as_ref().map(|j| PoiStatus { progress: j.last.clone() }))
+}
+
+fn run_poi_update(app: AppHandle, dir: PathBuf, cancel: Arc<AtomicBool>) {
+    let state = app.state::<AppState>();
+    let result = ingest::poi::build(
+        &ingest::poi::Options::online(&dir),
+        &mut |p| {
+            if let Ok(mut job) = state.poi.lock() {
+                if let Some(job) = job.as_mut() {
+                    job.last = Some(p.clone());
+                }
+            }
+            let _ = app.emit("poi-progress", p);
+        },
+        cancel.clone(),
+    );
+    let cancelled = cancel.load(Ordering::Relaxed);
+    let done = match result {
+        Ok(stats) => {
+            eprintln!(
+                "points of interest: {} in {:.0}s ({} malformed, unmapped {:?}), {} bytes",
+                stats.pois, stats.seconds, stats.malformed, stats.unknown_types, stats.file_bytes
+            );
+            PoiDone { ok: true, cancelled: false, error: None, pois: Some(stats.pois), seconds: Some(stats.seconds) }
+        }
+        Err(e) => {
+            if !cancelled {
+                eprintln!("points-of-interest download failed: {e:#}");
+            }
+            PoiDone { ok: false, cancelled, error: (!cancelled).then(|| format!("{e:#}")), pois: None, seconds: None }
+        }
+    };
+    if let Ok(mut job) = state.poi.lock() {
+        *job = None;
+    }
+    let _ = app.emit("poi-done", done);
+}
+
 // --- Data scheme and journal watcher -----------------------------------------
 
 /// Maps a request path onto a file inside the data dir, refusing anything
@@ -805,6 +917,9 @@ pub fn run() {
             start_populated_update,
             cancel_populated_update,
             populated_update_status,
+            start_poi_update,
+            cancel_poi_update,
+            poi_update_status,
         ])
         .setup(|app| {
             let paths = app.path();
@@ -823,6 +938,7 @@ pub fn run() {
                 commander: Mutex::new(commander),
                 build: Mutex::new(None),
                 populated: Mutex::new(None),
+                poi: Mutex::new(None),
                 online,
             });
             spawn_journal_watcher(app.handle().clone());
@@ -837,25 +953,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn populated_systems_follow_a_new_data_folder() {
+    fn downloaded_datasets_follow_a_new_data_folder() {
         let dir = tempfile::tempdir().unwrap();
         let (old, new) = (dir.path().join("old"), dir.path().join("new"));
         std::fs::create_dir_all(&old).unwrap();
         std::fs::create_dir_all(&new).unwrap();
-        let name = ingest::populated::FILE_NAME;
+        let (layers, poi) = (ingest::populated::FILE_NAME, ingest::poi::FILE_NAME);
 
-        carry_populated(&old, &new);
-        assert!(!new.join(name).exists(), "nothing to carry");
+        carry_files(&old, &new);
+        assert!(!new.join(layers).exists() && !new.join(poi).exists(), "nothing to carry");
 
-        std::fs::write(old.join(name), b"layers").unwrap();
-        carry_populated(&old, &new);
-        assert_eq!(std::fs::read(new.join(name)).unwrap(), b"layers");
-        assert!(!new.join(format!("{name}.partial")).exists());
+        std::fs::write(old.join(layers), b"layers").unwrap();
+        carry_files(&old, &new);
+        assert_eq!(std::fs::read(new.join(layers)).unwrap(), b"layers");
+        assert!(!new.join(format!("{layers}.partial")).exists());
+        assert!(!new.join(poi).exists(), "only what's there is copied");
 
-        // A folder with its own copy keeps it.
-        std::fs::write(old.join(name), b"newer elsewhere").unwrap();
-        carry_populated(&old, &new);
-        assert_eq!(std::fs::read(new.join(name)).unwrap(), b"layers");
+        // A folder with its own copy keeps it; the other file still comes along.
+        std::fs::write(old.join(layers), b"newer elsewhere").unwrap();
+        std::fs::write(old.join(poi), b"places").unwrap();
+        carry_files(&old, &new);
+        assert_eq!(std::fs::read(new.join(layers)).unwrap(), b"layers");
+        assert_eq!(std::fs::read(new.join(poi)).unwrap(), b"places");
     }
 
     #[test]

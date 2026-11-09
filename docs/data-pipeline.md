@@ -4,12 +4,13 @@ How StellarCartography gets its data, what it does with it, and where it
 keeps the results. Figures are from builds on 9 November 2026, on a 4-core
 cloud machine downloading at about 25 MB/s.
 
-There are four inputs, and only the first two are built into stored datasets:
+There are five inputs, and only the first three are built into stored datasets:
 
 | Input | Source | Built into | Refreshed |
 | --- | --- | --- | --- |
 | Galaxy catalogue | EDSM dump, 3.4 GB | `galaxy.sqlite`, `tiles/`, density maps | weekly reminder, or Settings → Rebuild from EDSM |
 | Populated systems | Spansh dump, 4.7 GB | `populated.bin` | weekly reminder, or Settings → Update from Spansh |
+| Points of interest | four EDAstro files, about 900 MB | `poi.json` | weekly reminder, or Settings → Update from EDAstro |
 | System details | Spansh and EDSM APIs, per click | `details-cache.sqlite` (raw answers) | automatically, hourly |
 | Game files | journals, `VisitedStarsCache.dat` | nothing (read into memory) | live |
 
@@ -148,7 +149,7 @@ Little-endian:
 - The file is written as `populated.bin.partial` and renamed into place when complete. The update first checks for room for a second copy.
 - The web view maps each column straight onto a typed array, without decoding ([`populated-data.ts`](../app/src/renderer/populated-data.ts)).
 - Catalogue rebuilds never touch this file.
-- When the data folder changes (Settings → "Use another folder…", or a build into a new folder), the file is copied into the new folder if that has none, so the layers come along.
+- When the data folder changes (Settings → "Use another folder…", or a build into a new folder), the file is copied into the new folder if that has none, so the layers come along. `poi.json` is carried the same way.
 
 | Figure | Value |
 | --- | --- |
@@ -158,7 +159,73 @@ Little-endian:
 | File size | 16.7 MB (5.4 MB of it header) |
 | Time | 4 min 33 s; limited by the download, 2 min of CPU |
 
-## 3. System details
+## 3. Points of interest
+
+The Places directory and the map's markers: Guardian and Thargoid sites,
+carrier hubs, megaships, nebulae and sights. Code:
+[`crates/ingest/src/poi.rs`](../crates/ingest/src/poi.rs),
+[`app/src/poi.ts`](../app/src/poi.ts).
+
+### Sources
+
+Four files that EDAstro publishes, read in this order:
+
+| File | Size | Kept |
+| --- | --- | --- |
+| `gec/json/all`: the Galactic Exploration Catalog | 2.2 MB of JSON | all 658 entries, with summaries and links |
+| `mapcharts/files/edsmPOI.csv`: EDSM's Galactic Mapping Project | 1.3 MB | 8,398 rows of the types below |
+| `mapcharts/files/fleetcarriers.csv`: every known fleet carrier | 21 MB, 92k carriers | 199 carrier hubs |
+| `mapcharts/files/codex-data.csv`: every codex entry players have reported, per system | 875 MB, 5.0M rows | 394 Guardian and 419 Thargoid systems |
+
+Why these:
+- **Guardian and Thargoid sites:** the codex reports are the only full record. EDSM's own Guardian entries are unnamed points on a 10 ly grid, and the GEC names only 17 Guardian sites.
+- **Carrier hubs:** the carrier list includes carriers parked in unpopulated systems. Counting carriers in Spansh's populated dump would miss those.
+- **EDSM's mapping project:** EDSM's own JSON of it sits behind a browser check that blocks downloads. EDAstro refreshes its copy daily.
+- **Engineers aren't included.** Neither catalogue lists them, and Spansh's and EDSM's station data don't mark engineer bases: the "Workshop" service they show is at most stations. Their locations exist only inside other apps' source code.
+
+### Processing
+
+- **Download:** each file is streamed with the same resumable reader as the dumps. Nothing raw is kept.
+- **Codex filter:** the codex reports are read row by row. Only rows whose Codex ID starts with `codex_ent_guardian_`, `codex_ent_thargoid_` or `codex_ent_tg_` are decoded.
+- **Categories:** every entry gets one of ten categories and a readable kind, from the mapping tables in `poi.rs`.
+  - Types the tables don't know are filed under sights & history and counted in the build log.
+  - The web view gives each category its own marker shape.
+- **Skipped from EDSM's file:**
+  - personal carrier bookmarks (`carrier`);
+  - the unnamed Guardian grid points (`guardian`);
+  - bare system names (`canonn`);
+  - route waypoints (`trit_hwy*`) and legend markers (`STAR*`);
+  - DSSA carriers that aren't deployed;
+  - its older copy of the GEC.
+- **Codex grouping:** one place per system and category. The strongest entry names the site:
+  - Guardian: Structure, then Ruins, then Beacon;
+  - Thargoid: Structure, then Spire site, then Barnacle site, then surface site.
+
+  The summary lists every entry reported there. Names come from the Codex ID, because the file's own entry names are in whatever language each reporter's game used.
+- **Carrier hubs:** a hub is a system with 10 or more carriers seen in the 30 days up to the newest sighting in the file. Bigger hubs get bigger markers.
+- **Summaries:** cut to about 300 characters.
+
+### Storage: `poi.json`
+
+- **Header:** format version (1), `builtAt`, each source's URL and Last-Modified date, and counts per category.
+- **Entries:** `pois`, each with:
+  - `id` (`<source>:<id>`), `source`, `category`, `kind`, `name`;
+  - optional `system`, `id64` (as a string), `region`, `summary`, `url`, and `weight` (carriers);
+  - `pos`.
+- **Future sources:** user-added places would be one more `source` in the same list.
+- **Writing:** the file is written as `poi.json.partial` and renamed into place when complete, so a failed or cancelled download leaves the old one.
+- **Reading:** the web view reads it whole.
+- **Positions:** come from the sources themselves. EDSM's rows carry no id64, so when one is picked, the system's id64 is looked up in `galaxy.sqlite` by name.
+
+| Figure | Value |
+| --- | --- |
+| Places | 10,049 (5,870 of them planetary nebulae, hidden by default) |
+| File size | 2.2 MB |
+| Downloaded | 858 MB, 96% of it codex reports |
+| Time | 61 s, nearly all of it the download |
+| Peak memory | 37 MB |
+
+## 4. System details
 
 Fetched when a star is clicked. Code:
 [`app/src-tauri/src/details.rs`](../app/src-tauri/src/details.rs),
@@ -172,7 +239,7 @@ Fetched when a star is clicked. Code:
   - If a site can't be reached, an older copy is shown and marked.
   - Entries older than 30 days are deleted at startup.
 
-## 4. Game files
+## 5. Game files
 
 Code: [`journal.rs`](../crates/galaxy-core/src/journal.rs), [`visited.rs`](../crates/galaxy-core/src/visited.rs).
 
@@ -193,7 +260,7 @@ Code: [`journal.rs`](../crates/galaxy-core/src/journal.rs), [`visited.rs`](../cr
 
 | File | Location |
 | --- | --- |
-| Catalogue, tiles, density maps, `populated.bin`, `ingest-stats.json` | the data folder (below) |
+| Catalogue, tiles, density maps, `populated.bin`, `poi.json`, `ingest-stats.json` | the data folder (below) |
 | `details-cache.sqlite` | `%LOCALAPPDATA%\io.github.stellarcartography.viewer\` |
 | `settings.json` (written via a temporary file and a rename) | `%APPDATA%\io.github.stellarcartography.viewer\` |
 
@@ -209,11 +276,11 @@ opened read-only for search and lookups.
 
 ## Refreshing
 
-- **The reminder:** when the catalogue or the populated systems are over a week old, a toast says so, with a Rebuild or Update button. Nothing downloads until it's clicked.
+- **The reminder:** when the catalogue, the populated systems or the points of interest are over a week old, a toast says so, with a Rebuild or Update button. Nothing downloads until it's clicked.
 - **When it checks:** a minute after start, then hourly. It reminds at most once a day per dataset, and stays quiet while a build or download runs.
 - **Off switch:** Settings → Updates.
-- **What it compares:** the catalogue's `built_at`, or the database file's age for builds made before it was recorded, and `populated.bin`'s `builtAt`.
-- **Full downloads, on purpose:** both datasets are always downloaded in full (3.4 GB and 4.7 GB), which is fine at once a week. EDSM's 7-day dump and Spansh's 1-day dump would allow incremental updates, but appending to SQLite and inserting into existing tiles isn't worth it at that pace.
+- **What it compares:** the catalogue's `built_at`, or the database file's age for builds made before it was recorded, and the `builtAt` of `populated.bin` and `poi.json`.
+- **Full downloads, on purpose:** the datasets are always downloaded in full (3.4 GB, 4.7 GB and 0.9 GB), which is fine at once a week. EDSM's 7-day dump and Spansh's 1-day dump would allow incremental updates, but appending to SQLite and inserting into existing tiles isn't worth it at that pace.
 
 ## Limits
 

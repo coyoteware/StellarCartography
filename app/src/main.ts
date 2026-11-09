@@ -7,6 +7,7 @@ import {
   getSystem,
   onCommanderJump,
   saveViewSettings,
+  searchSystems,
   visitedSystems,
   type CommanderPayload,
   type DataStatus,
@@ -15,6 +16,7 @@ import {
   type ViewSettings,
   type VisitedSystem,
 } from "./api";
+import type { Poi } from "./poi";
 import { CommanderLayer, SelectionMarker } from "./renderer/commander";
 import { SGR_A, SOL, edToWorld, worldToEd } from "./renderer/coords";
 import { GalaxyGlow } from "./renderer/glow";
@@ -24,6 +26,7 @@ import { CatalogueUi } from "./ui/catalogue";
 import { Hud } from "./ui/hud";
 import { SystemPanel } from "./ui/details";
 import { OverlayUi } from "./ui/overlay";
+import { PlacesUi, describePoi } from "./ui/places";
 import { Reminders } from "./ui/reminders";
 import { setupSearch } from "./ui/search";
 import { SettingsPanel } from "./ui/settings";
@@ -53,6 +56,8 @@ let viewSettings: ViewSettings = {
   route: true,
   overlay: "none",
   highlights: {},
+  poi: true,
+  poiHidden: ["planetaryNebula"],
 };
 let reportedTileFailures = 0;
 let updateReminders = true;
@@ -62,8 +67,10 @@ let catalogueBuiltAt: number | null = null;
 const systemPanel = new SystemPanel($("info-panel"), {
   commanderPos: () => commander.current()?.pos,
   visited: (id64) => visitedById.get(id64),
+  places: (id64, name) => places.inSystem(id64, name),
   onClose: () => {
     selection.set(null);
+    places.highlight(null);
     view.wake();
   },
   onError: (message) => toasts.error(message, { timeout: 8 }),
@@ -84,6 +91,21 @@ const overlay = new OverlayUi({
   },
 });
 
+const places = new PlacesUi({
+  toasts,
+  view: () => viewSettings,
+  onView: (v) => applyView(v),
+  origin: () => {
+    const cur = commander.current();
+    return cur ? { pos: cur.pos, what: "your location" } : { pos: worldToEd(view.controls.target), what: "the view's centre" };
+  },
+  onPick: (poi) => void selectPoi(poi, true),
+  onChange: (layer) => {
+    if (layer && !layer.object.parent) view.overlay.add(layer.object);
+    view.wake();
+  },
+});
+
 const settingsPanel = new SettingsPanel({
   toasts,
   view: () => viewSettings,
@@ -93,18 +115,24 @@ const settingsPanel = new SettingsPanel({
   populatedStatus: () => overlay.statusText(),
   populatedRunning: () => overlay.running,
   onPopulatedUpdate: () => void overlay.startUpdate(),
+  poiStatus: () => places.statusText(),
+  poiRunning: () => places.running,
+  onPoiUpdate: () => void places.startUpdate(),
   onReminders: (on) => (updateReminders = on),
 });
 overlay.onStatus = () => settingsPanel.renderPopulated();
+places.onStatus = () => settingsPanel.renderPoi();
 
 const reminders = new Reminders({
   toasts,
   enabled: () => updateReminders,
   catalogueBuiltAt: () => catalogueBuiltAt,
   populatedBuiltAt: () => overlay.populated?.builtAt ?? null,
-  busy: async () => overlay.running || (await catalogue.running()),
+  poiBuiltAt: () => places.points?.builtAt ?? null,
+  busy: async () => overlay.running || places.running || (await catalogue.running()),
   rebuildCatalogue: () => void catalogue.rebuild(),
   updatePopulated: () => void overlay.startUpdate(),
+  updatePoi: () => void places.startUpdate(),
 });
 const openSettings = { label: "Settings", run: () => void settingsPanel.open() };
 
@@ -135,7 +163,9 @@ function applyView(next: ViewSettings, persist = true): void {
   $<HTMLInputElement>("layer-glow").checked = next.glow;
   $<HTMLInputElement>("layer-stars").checked = next.stars;
   $<HTMLInputElement>("layer-route").checked = next.route;
+  $<HTMLInputElement>("layer-poi").checked = next.poi;
   overlay.sync();
+  places.sync();
   applyDimming();
   view.wake();
   if (!persist) return;
@@ -151,8 +181,32 @@ function select(system: SystemInfo, fly: boolean): void {
   const pos = edToWorld(system.pos);
   selection.set(pos);
   systemPanel.show(system);
+  places.highlight(places.inSystem(system.id64, system.name)[0] ?? null);
   if (fly) view.flyTo(pos, 60);
   view.wake();
+}
+
+/** Selects a point of interest's system (or, for one outside any system, just the spot). */
+async function selectPoi(poi: Poi, fly: boolean): Promise<void> {
+  if (!poi.system) {
+    const pos = edToWorld(poi.pos);
+    systemPanel.close();
+    selection.set(pos);
+    places.highlight(poi);
+    if (fly) view.flyTo(pos, 60);
+    view.wake();
+    return;
+  }
+  let system: SystemInfo = { rowid: null, id64: poi.id64 ?? null, name: poi.system, pos: poi.pos };
+  if (!poi.id64) {
+    // EDSM's mapping entries name the system but carry no id64: take the
+    // catalogue's, so the details lookup can ask Spansh.
+    const name = poi.system.toLowerCase();
+    const found = await searchSystems(poi.system).catch(() => []);
+    system = found.find((s) => s.name.toLowerCase() === name) ?? system;
+  }
+  select(system, fly);
+  places.highlight(poi);
 }
 
 async function loadGalaxy(status: Extract<DataStatus, { state: "ready" }>): Promise<void> {
@@ -173,6 +227,7 @@ async function loadGalaxy(status: Extract<DataStatus, { state: "ready" }>): Prom
   }
   applyView(viewSettings, false);
   void overlay.load();
+  void places.load();
   reminders.start();
 }
 
@@ -282,12 +337,12 @@ async function loadCommander(): Promise<void> {
 
 // --- UI wiring ---------------------------------------------------------------
 
-setupSearch(
-  $("search"),
-  $("search-results"),
-  (s) => select(s, true),
-  (e) => toasts.error(`Search failed: ${errorText(e)}`, { timeout: 8 }),
-);
+setupSearch($("search"), $("search-results"), {
+  onPickSystem: (s) => select(s, true),
+  onPickPoi: (p) => void selectPoi(p, true),
+  places: (query, limit) => places.search(query, limit),
+  onError: (e) => toasts.error(`Search failed: ${errorText(e)}`, { timeout: 8 }),
+});
 $("go-sol").addEventListener("click", showSol);
 $("go-galaxy").addEventListener("click", () => view.flyTo(edToWorld(SGR_A), 95_000, 2));
 $("go-cmdr").addEventListener("click", () => {
@@ -295,7 +350,7 @@ $("go-cmdr").addEventListener("click", () => {
   if (cur) view.flyTo(edToWorld(cur.pos), 80);
 });
 $("open-settings").addEventListener("click", () => void settingsPanel.open());
-for (const layer of ["glow", "stars", "route"] as const) {
+for (const layer of ["glow", "stars", "route", "poi"] as const) {
   $<HTMLInputElement>(`layer-${layer}`).addEventListener("change", (e) =>
     applyView({ ...viewSettings, [layer]: (e.target as HTMLInputElement).checked }),
   );
@@ -318,6 +373,24 @@ function hideHover(): void {
   hoverRowid = -1;
   hoverLabel.hidden = true;
   canvas.style.cursor = "";
+  setPoiHover(null);
+}
+
+let poiHover: number | null = null;
+
+function setPoiHover(i: number | null): void {
+  if (i === poiHover) return;
+  poiHover = i;
+  places.layer?.setHover(i);
+  view.wake();
+}
+
+/** The point-of-interest marker under (x, y), when they're drawn. */
+function pickPoi(x: number, y: number, radius: number): Poi | null {
+  const layer = places.layer;
+  if (!layer || !layer.visible) return null;
+  const i = layer.pick(view.camera, canvas.clientWidth, canvas.clientHeight, x, y, radius);
+  return i === null ? null : layer.pois[i];
 }
 
 /** The overlay dot under (x, y), when an overlay layer is drawn. */
@@ -330,7 +403,19 @@ function hover(): void {
   hoverTimer = 0;
   if (!hoverAt) return;
   const { x, y } = hoverAt;
-  // Coloured dots first: they're what the overlay is about.
+  // Markers first, then coloured dots: they're what those layers are about.
+  const poi = pickPoi(x, y, 5);
+  if (poi && places.layer) {
+    hoverRowid = -1;
+    setPoiHover(places.layer.indexOf(poi));
+    canvas.style.cursor = "pointer";
+    hoverLabel.style.left = `${x}px`;
+    hoverLabel.style.top = `${y}px`;
+    hoverLabel.textContent = `${poi.name} · ${describePoi(poi)}`;
+    hoverLabel.hidden = false;
+    return;
+  }
+  setPoiHover(null);
   const dot = pickOverlay(x, y, 5);
   if (dot !== null && overlay.layer && overlay.populated) {
     hoverRowid = -1;
@@ -357,6 +442,10 @@ function hover(): void {
   });
 }
 
+// The label describes what was under the cursor before the view moved.
+view.controls.addEventListener("change", () => {
+  if (!hoverLabel.hidden) hideHover();
+});
 canvas.addEventListener("pointermove", (e) => {
   if (e.buttons !== 0) return hideHover();
   hoverAt = canvasPoint(e);
@@ -374,6 +463,8 @@ canvas.addEventListener("pointerdown", (e) => {
 canvas.addEventListener("pointerup", async (e) => {
   if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return;
   const { x, y } = canvasPoint(e);
+  const poi = pickPoi(x, y, 6);
+  if (poi) return void selectPoi(poi, false);
   const dot = pickOverlay(x, y, 6);
   const dotSystem = dot !== null ? overlay.systemInfo(dot) : null;
   if (dotSystem) return select(dotSystem, false);
@@ -403,6 +494,7 @@ view.onFrame((now, dt) => {
   }
   commander.update(now);
   overlay.layer?.update(view.pixelRatio);
+  places.layer?.update(view.camera, canvas.clientWidth, canvas.clientHeight, view.pixelRatio, !view.idle);
   const stats = cloud?.stats() ?? null;
   if (stats && stats.failed > reportedTileFailures) {
     if (reportedTileFailures === 0) {
@@ -431,6 +523,7 @@ if (import.meta.env.DEV) {
       commander,
       catalogue,
       overlay,
+      places,
       reminders,
       settingsPanel,
       systemPanel,

@@ -1,5 +1,6 @@
-// Weekly update reminders: when the galaxy catalogue or the populated
-// systems are over a week old, a toast offers to refresh them. Nothing is
+// Weekly update reminders: when the galaxy catalogue, the populated systems
+// or the points of interest are over a week old, a toast offers to refresh
+// them. Nothing is
 // downloaded without a click. Checked a minute after start, then hourly
 // (the viewer may stay open for days), at most once a day per dataset.
 
@@ -14,13 +15,15 @@ export interface ReminderDeps {
   /** Unix seconds, or null when unknown or not downloaded. */
   catalogueBuiltAt: () => number | null;
   populatedBuiltAt: () => number | null;
+  poiBuiltAt: () => number | null;
   /** True while a build or download runs. */
   busy: () => Promise<boolean>;
   rebuildCatalogue: () => void;
   updatePopulated: () => void;
+  updatePoi: () => void;
 }
 
-type Dataset = "catalogue" | "populated";
+type Dataset = "catalogue" | "populated" | "poi";
 
 export class Reminders {
   private readonly shown = new Map<Dataset, number>();
@@ -51,6 +54,13 @@ export class Reminders {
       (days) => `The map layers' data is ${days} days old. Updating downloads about 4.7 GB and takes about 5 minutes.`,
       "Update",
       this.deps.updatePopulated,
+    );
+    this.remind(
+      "poi",
+      this.deps.poiBuiltAt(),
+      (days) => `The points of interest are ${days} days old. Updating downloads about 900 MB and takes a few minutes.`,
+      "Update",
+      this.deps.updatePoi,
     );
   }
 

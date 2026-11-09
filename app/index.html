@@ -9,15 +9,23 @@
   <body>
     <div id="viewport"></div>
 
-    <div class="panel" id="search-panel">
-      <input id="search" type="search" placeholder="Search systems…" autocomplete="off" spellcheck="false" />
-      <ul id="search-results" hidden></ul>
-      <div class="buttons">
-        <button id="go-sol" type="button">Sol</button>
-        <button id="go-galaxy" type="button">Galaxy</button>
-        <button id="go-cmdr" type="button" hidden>Commander</button>
-        <button id="open-settings" type="button" class="push" title="Settings">Settings</button>
+    <div id="poi-labels"></div>
+
+    <!-- Left-hand column: search on top, the places directory below (scrolls
+         when it doesn't fit). -->
+    <div id="left-column">
+      <div class="panel" id="search-panel">
+        <input id="search" type="search" placeholder="Search systems and places…" autocomplete="off" spellcheck="false" />
+        <ul id="search-results" hidden></ul>
+        <div class="buttons">
+          <button id="go-sol" type="button">Sol</button>
+          <button id="go-galaxy" type="button">Galaxy</button>
+          <button id="go-cmdr" type="button" hidden>Commander</button>
+          <button id="open-settings" type="button" class="push" title="Settings">Settings</button>
+        </div>
       </div>
+
+      <div class="panel" id="places-panel"></div>
     </div>
 
     <!-- Right-hand column: layers on top, the selected system's details below
@@ -27,6 +35,7 @@
         <label><input type="checkbox" id="layer-glow" checked /> Galaxy glow</label>
         <label><input type="checkbox" id="layer-stars" checked /> Known systems</label>
         <label><input type="checkbox" id="layer-route" checked /> Travel history</label>
+        <label><input type="checkbox" id="layer-poi" checked /> Points of interest</label>
         <div id="overlay">
           <label class="overlay-pick">
             Colour systems by
@@ -44,7 +53,7 @@
     </div>
 
     <div id="hud"></div>
-    <div id="help">Drag to rotate · right-drag to pan · scroll to zoom · click a star for details</div>
+    <div id="help">Drag to rotate · right-drag to pan · scroll to zoom · click a star or marker for details</div>
     <div id="hover-label" hidden></div>
     <div id="toasts"></div>
 
@@ -161,9 +170,31 @@
         </p>
       </section>
       <section>
+        <h2>Points of interest</h2>
+        <div id="set-poi"></div>
+        <div class="buttons">
+          <button id="set-poi-update" type="button">Download from EDAstro…</button>
+        </div>
+        <div id="set-poi-confirm" class="confirm" hidden>
+          <p>
+            Downloads EDAstro's catalogues (about 900 MB, not kept, almost all of it codex reports) and keeps about 2 MB
+            of places. Takes a few minutes; the map stays usable meanwhile.
+          </p>
+          <div class="buttons">
+            <button id="set-poi-go" type="button" class="primary">Download</button>
+            <button id="set-poi-cancel" type="button">Cancel</button>
+          </div>
+        </div>
+        <p class="muted small">
+          Guardian and Thargoid sites from players' codex reports, carrier hubs from the fleet carrier list, and
+          megaships, nebulae and sights from the Galactic Exploration Catalog and EDSM's Galactic Mapping Project.
+          Find them under Places.
+        </p>
+      </section>
+      <section>
         <h2>Updates</h2>
         <label class="row">
-          Remind me when the catalogue or map layers are over a week old
+          Remind me when the catalogue, map layers or places are over a week old
           <input type="checkbox" id="set-update-reminders" />
         </label>
         <p class="muted small">Nothing downloads until you click Rebuild or Update in the reminder.</p>

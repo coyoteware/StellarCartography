@@ -49,8 +49,8 @@ On first run the app offers to **download and build** the catalogue (streams
 about 3.4 GB from EDSM, nothing kept but the result; about 10 GB of data;
 10–15 minutes), or to **use an existing build** folder. Later, Settings →
 "Rebuild from EDSM…" refreshes it in the background while the map stays usable.
-Once the catalogue or the map layers are over a week old, a reminder offers
-to update them (Settings → Updates turns it off). Builds check free disk
+Once the catalogue, the map layers or the points of interest are over a week
+old, a reminder offers to update them (Settings → Updates turns it off). Builds check free disk
 space first.
 
 The data folder is chosen in this order:
@@ -91,6 +91,34 @@ The layers panel offers the first download. Settings → "Update from Spansh…"
 refreshes it whenever you like (Powerplay moves weekly). Catalogue rebuilds don't
 touch it.
 
+## Points of interest
+
+**Places**, under the search box, is a directory of notable systems, and
+Layers → **Points of interest** draws them on the map as markers with name
+labels close up:
+- **Guardian sites** and **Thargoid sites**: every system where players have
+  reported Guardian ruins, structures or beacons, or Thargoid structures,
+  spires or barnacles in the codex.
+- **Carrier hubs**: systems with 10 or more fleet carriers seen in the last 30
+  days, where players gather. Bigger markers mean more carriers.
+- **Mysteries**, **outposts and megaships** (DSSA and other support carriers
+  included), **nebulae**, **stellar phenomena**, **planets and life**, and
+  **sights and history**, from the Galactic Exploration Catalog and EDSM's
+  Galactic Mapping Project. **Planetary nebulae** (about 5,900 catalogue
+  entries) start hidden.
+
+Each category has its own marker shape, all in one colour, so none depends on
+telling colours apart. Click a category to show or hide it, both in the list and
+on the map. The list is sorted by distance from your commander, and the filter
+matches names, systems and kinds ("guardian structure", "megaship"). The search
+box finds places too. Clicking a place or a marker flies there and opens the
+system, whose details list the places in it.
+
+The places come from four files EDAstro publishes. Places → Download (or
+Settings → Points of interest) streams about 900 MB, almost all of it codex
+reports, keeps about 2 MB as `poi.json` in the data folder, and takes a few
+minutes. Engineers aren't included: no community dataset publishes them.
+
 ## System details
 
 Clicking a star opens a panel with what's known about the system:
@@ -98,6 +126,7 @@ Clicking a star opens a panel with what's known about the system:
 - Powerplay: the controlling power and its state, control progress and
   reinforcement/undermining, or each power's progress in an unoccupied system;
 - minor factions, with influence, states, and any war or election;
+- points of interest in the system;
 - stations, with type, largest pad, distance and notable services;
 - the main star and body count, and your own visits.
 
@@ -128,6 +157,14 @@ records. `--sphere x,y,z,radius` keeps only systems inside a sphere, and
 
 ```bash
 cargo run --release -p ingest -- --populated --out data
+```
+
+`--poi` builds `poi.json` for the points of interest from EDAstro. With
+`--input folder`, it reads local copies named `gec.json`, `edsmPOI.csv`,
+`fleetcarriers.csv` and `codex-data.csv`:
+
+```bash
+cargo run --release -p ingest -- --poi --out data
 ```
 
 ## Installer
@@ -161,6 +198,9 @@ from the Actions tab with "Run workflow".
 - System catalogue: [EDSM](https://www.edsm.net) nightly dump `systemsWithCoordinates.json.gz`.
 - System details: [Spansh](https://spansh.co.uk) and [EDSM](https://www.edsm.net) APIs, looked up per system on demand.
 - Map layers: [Spansh](https://spansh.co.uk) dump `galaxy_populated.json.gz`.
+- Points of interest: [EDAstro](https://edastro.com)'s Galactic Exploration
+  Catalog, its copy of EDSM's Galactic Mapping Project, its fleet carrier list
+  and its codex reports, all gathered by players.
 - The galaxy glow ray-marches a density map built from id64 boxel indices. The
   idea comes from [spansh/elite-galaxy-map](https://github.com/spansh/elite-galaxy-map);
   the shader and data here are our own.
