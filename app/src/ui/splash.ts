@@ -16,13 +16,13 @@ const QUOTES: Quote[] = [
   { text: "Shut up, Wesley!", from: tng("Datalore") },
   { text: "Things are only impossible until they’re not.", from: tng("When the Bough Breaks") },
   { text: "No being is so important that he can usurp the rights of another.", from: tng("The Schizoid Man") },
-  { text: "Starfleet was founded to seek out new life. Well, there it sits.", from: tng("The Measure of a Man") },
+  { text: "Starfleet was founded to seek out new life. Well, there it sits!", from: tng("The Measure of a Man") },
   {
     text: "Open your mind to the past. Art, history, philosophy. And all this may mean something.",
     from: tng("Samaritan Snare"),
   },
   {
-    text: "It is possible to commit no mistakes and still lose. That is not a weakness. That is life.",
+    text: "It is possible to commit no mistakes and still lose. That is not a weakness; that is life.",
     from: tng("Peak Performance"),
   },
   { text: "A matter of internal security: the age-old cry of the oppressor.", from: tng("The Hunted") },
@@ -40,7 +40,7 @@ const QUOTES: Quote[] = [
     from: tng("The Drumhead"),
   },
   {
-    text: "I’d be delighted to offer any advice I can on understanding women. When I have some, I’ll let you know.",
+    text: "I’d be delighted to offer any advice I have on understanding women. When I have some, I’ll let you know.",
     from: tng("In Theory"),
   },
   { text: "In my experience, communication is a matter of patience, imagination.", from: tng("Darmok") },
@@ -57,12 +57,7 @@ const QUOTES: Quote[] = [
   { text: "I rather believe that time is a companion who goes with us on the journey.", from: "Star Trek Generations" },
   { text: "What we leave behind is not as important as how we’ve lived.", from: "Star Trek Generations" },
   { text: "The line must be drawn here! This far, no further!", from: "Star Trek: First Contact" },
-  {
-    text:
-      "The acquisition of wealth is no longer the driving force in our lives. " +
-      "We work to better ourselves and the rest of humanity.",
-    from: "Star Trek: First Contact",
-  },
+  { text: "We work to better ourselves and the rest of humanity.", from: "Star Trek: First Contact" },
 ];
 
 /** Where the last quote shown is remembered, so two starts in a row differ. */
