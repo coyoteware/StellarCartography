@@ -20,6 +20,9 @@ pub struct Settings {
     /// Offer an update when the catalogue or populated systems are over a week old.
     pub update_reminders: bool,
     pub view: ViewSettings,
+    /// Keyboard shortcuts the user changed: action id → its two keys ("" is
+    /// an empty slot). Actions not listed keep the web view's defaults.
+    pub keys: BTreeMap<String, Vec<String>>,
 }
 
 impl Default for Settings {
@@ -30,6 +33,7 @@ impl Default for Settings {
             details_source: OnlineSource::default(),
             update_reminders: true,
             view: ViewSettings::default(),
+            keys: BTreeMap::new(),
         }
     }
 }
@@ -116,6 +120,7 @@ mod tests {
                 poi_hidden: vec![],
                 ..Default::default()
             },
+            keys: BTreeMap::from([("moveUp".into(), vec!["Space".into(), String::new()])]),
             ..Default::default()
         };
         s.save(&path).unwrap();
@@ -133,6 +138,7 @@ mod tests {
         assert_eq!(partial.details_source, OnlineSource::Spansh);
 
         assert!(partial.update_reminders, "reminders are on unless turned off");
+        assert!(partial.keys.is_empty(), "files from before the key bindings");
 
         std::fs::write(&path, r#"{"detailsSource":"off","updateReminders":false}"#).unwrap();
         assert_eq!(Settings::load(&path).details_source, OnlineSource::Off);

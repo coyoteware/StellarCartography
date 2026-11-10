@@ -110,9 +110,9 @@ export class SystemPanel {
     private readonly deps: PanelDeps,
   ) {
     document.addEventListener("keydown", (e) => {
-      // Search uses Escape to clear its list, and Settings closes itself first.
-      const settingsOpen = document.getElementById("settings")?.hidden === false;
-      if (e.key === "Escape" && !e.defaultPrevented && !settingsOpen && !this.root.hidden) this.close();
+      // Search uses Escape to clear its list, and Settings and the key list close themselves first.
+      const cardOpen = document.querySelector("#settings:not([hidden]), #keys:not([hidden])") !== null;
+      if (e.key === "Escape" && !e.defaultPrevented && !cardOpen && !this.root.hidden) this.close();
     });
   }
 

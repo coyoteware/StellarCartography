@@ -52,6 +52,8 @@ export interface Settings {
   /** Offer an update when the catalogue or populated systems are over a week old. */
   updateReminders: boolean;
   view: ViewSettings;
+  /** Keyboard shortcuts the user changed: action id → its two keys (see keys.ts). */
+  keys: Record<string, string[]>;
 }
 
 /** Free space for a catalogue build in a folder (bytes). */
@@ -251,6 +253,8 @@ export const commanderHistory = () => invoke<CommanderPayload>("commander_histor
 
 export const getSettings = () => invoke<Settings>("get_settings");
 export const saveViewSettings = (view: ViewSettings) => invoke<void>("save_view_settings", { view });
+/** Saves the keyboard shortcuts that differ from the defaults. */
+export const saveKeys = (keys: Record<string, string[]>) => invoke<void>("save_keys", { keys });
 /** Switches to an existing build in `dir` (or its `data` subfolder). */
 export const useDataDir = (dir: string) => invoke<DataStatus>("use_data_dir", { dir });
 /** `null` goes back to the game's default journal folder. */

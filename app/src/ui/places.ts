@@ -70,7 +70,7 @@ export class PlacesUi {
   private loads = 0;
   private readonly panel = $("places-panel");
   private readonly body = h("div", "places-body");
-  private readonly toggle = button("", () => this.setOpen(!this.open), "places-toggle");
+  private readonly toggle = button("", () => this.toggleOpen(), "places-toggle");
   private readonly total = h("span", "count");
   private open = false;
   private readonly filter: HTMLInputElement;
@@ -134,6 +134,11 @@ export class PlacesUi {
 
   get running(): boolean {
     return this.job.running;
+  }
+
+  /** Opens or closes the directory (its header, or a key). */
+  toggleOpen(): void {
+    this.setOpen(!this.open);
   }
 
   setOpen(open: boolean): void {

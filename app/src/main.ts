@@ -11,6 +11,7 @@ import {
   getSettings,
   getSystem,
   onCommanderJump,
+  saveKeys,
   saveViewSettings,
   searchSystems,
   visitedSystems,
@@ -21,6 +22,7 @@ import {
   type ViewSettings,
   type VisitedSystem,
 } from "./api";
+import { Bindings, Keyboard, chordLabel, loadLayout } from "./keys";
 import type { Poi } from "./poi";
 import { CommanderLayer, SelectionMarker } from "./renderer/commander";
 import { SGR_A, SOL, edToWorld, worldToEd } from "./renderer/coords";
@@ -31,6 +33,7 @@ import { View } from "./renderer/view";
 import { CatalogueUi } from "./ui/catalogue";
 import { Hud } from "./ui/hud";
 import { SystemPanel } from "./ui/details";
+import { KeysCard } from "./ui/keys";
 import { OverlayUi } from "./ui/overlay";
 import { PlacesUi, describePoi } from "./ui/places";
 import { Reminders } from "./ui/reminders";
@@ -143,9 +146,19 @@ const settingsPanel = new SettingsPanel({
   poiRunning: () => places.running,
   onPoiUpdate: () => void places.startUpdate(),
   onReminders: (on) => (updateReminders = on),
+  onKeys: () => keysCard.open(),
 });
 overlay.onStatus = () => settingsPanel.renderPopulated();
 places.onStatus = () => settingsPanel.renderPoi();
+
+const keyboard = new Keyboard({ modal: () => settingsPanel.shown || keysCard.shown });
+const keysCard = new KeysCard({
+  keyboard,
+  onChange: () => {
+    updateHelp();
+    saveKeys(keyboard.bindings.saved()).catch((e) => toasts.error(`Couldn't save the keys: ${errorText(e)}`));
+  },
+});
 
 const reminders = new Reminders({
   toasts,
@@ -384,22 +397,83 @@ setupSearch($("search"), $("search-results"), {
   places: (query, limit) => places.search(query, limit),
   onError: (e) => toasts.error(`Search failed: ${errorText(e)}`, { timeout: 8 }),
 });
-$("go-sol").addEventListener("click", showSol);
-$("go-galaxy").addEventListener("click", () => view.flyTo(edToWorld(SGR_A), 95_000, 2));
-$("go-cmdr").addEventListener("click", () => {
+const goGalaxy = () => view.flyTo(edToWorld(SGR_A), 95_000, 2);
+const goCommander = () => {
   const cur = commander.current();
   if (cur) view.flyTo(edToWorld(cur.pos), 80);
-});
+  // The button only shows once there is one; the key is always there.
+  else toasts.show("There's no commander location yet.", "info", { timeout: 4 });
+};
 // These sit among thousands of neighbours, so they're selected (marker and
 // details) as well as flown to.
-$("go-home").addEventListener("click", () => select(HOME, true));
-$("go-squadron").addEventListener("click", () => select(SQUADRON_CAPITAL, true));
+const goHome = () => select(HOME, true);
+const goSquadron = () => select(SQUADRON_CAPITAL, true);
+$("go-sol").addEventListener("click", showSol);
+$("go-galaxy").addEventListener("click", goGalaxy);
+$("go-cmdr").addEventListener("click", goCommander);
+$("go-home").addEventListener("click", goHome);
+$("go-squadron").addEventListener("click", goSquadron);
 $("open-settings").addEventListener("click", () => void settingsPanel.open());
 for (const layer of ["glow", "stars", "route", "poi"] as const) {
   $<HTMLInputElement>(`layer-${layer}`).addEventListener("change", (e) =>
     applyView({ ...viewSettings, [layer]: (e.target as HTMLInputElement).checked }),
   );
 }
+
+// --- Keyboard ----------------------------------------------------------------
+
+const HELP = "Drag to rotate · right-drag to pan · scroll to zoom · click a star or marker for details";
+
+/** The hint in the corner names the key for the key list, whatever it is now. */
+function updateHelp(): void {
+  const key = keyboard.bindings.get("keys").find(Boolean);
+  $("help").textContent = key ? `${HELP} · ${chordLabel(key)} for keys` : HELP;
+}
+
+keyboard.on("goSol", showSol);
+keyboard.on("goGalaxy", goGalaxy);
+keyboard.on("goCommander", goCommander);
+keyboard.on("goHome", goHome);
+keyboard.on("goSquadron", goSquadron);
+for (const [id, layer] of [
+  ["toggleGlow", "glow"],
+  ["toggleStars", "stars"],
+  ["toggleRoute", "route"],
+  ["togglePoi", "poi"],
+] as const) {
+  keyboard.on(id, () => applyView({ ...viewSettings, [layer]: !viewSettings[layer] }));
+}
+keyboard.on("search", () => {
+  const search = $<HTMLInputElement>("search");
+  search.focus();
+  search.select();
+});
+keyboard.on("places", () => places.toggleOpen());
+// One card at a time: each of these closes the other.
+keyboard.on("settings", () => {
+  keysCard.close();
+  if (settingsPanel.shown) settingsPanel.close();
+  else void settingsPanel.open();
+});
+keyboard.on("keys", () => {
+  settingsPanel.close();
+  keysCard.toggle();
+});
+keyboard.onHold = () => view.wake();
+view.setDriver(() => ({
+  forward: keyboard.axis("moveBack", "moveForward"),
+  right: keyboard.axis("moveLeft", "moveRight"),
+  up: keyboard.axis("moveDown", "moveUp"),
+  orbitRight: keyboard.axis("orbitLeft", "orbitRight"),
+  orbitUp: keyboard.axis("orbitDown", "orbitUp"),
+  zoomIn: keyboard.axis("zoomOut", "zoomIn"),
+}));
+updateHelp();
+// Keys are named as this keyboard's layout prints them, once the browser says.
+void loadLayout().then(() => {
+  keysCard.render();
+  updateHelp();
+});
 
 // Click (not drag) on a star to identify it; hover to see its name.
 const canvas = view.renderer.domElement;
@@ -503,6 +577,8 @@ canvas.addEventListener("pointerleave", () => {
 });
 canvas.addEventListener("pointerdown", (e) => {
   hideHover();
+  // Keys go to the map once it's clicked, not to the field or list used last.
+  if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
   down = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
 });
 canvas.addEventListener("pointerup", async (e) => {
@@ -577,6 +653,8 @@ if (import.meta.env.DEV) {
       reminders,
       settingsPanel,
       systemPanel,
+      keyboard,
+      keysCard,
       get cloud() {
         return cloud;
       },
@@ -594,6 +672,8 @@ async function boot(): Promise<void> {
     const settings = await getSettings();
     viewSettings = settings.view;
     updateReminders = settings.updateReminders;
+    keyboard.use(new Bindings(settings.keys ?? {}));
+    updateHelp();
   } catch (e) {
     toasts.error(`Couldn't read the settings: ${errorText(e)}`);
   }

@@ -13,6 +13,26 @@ import { FullScreenQuad } from "three/addons/postprocessing/Pass.js";
 
 type FrameCallback = (time: number, dt: number) => void;
 
+/**
+ * Keyboard flight for one frame. Each axis is -1, 0 or 1: moves are along the
+ * galactic plane relative to where the camera faces (up is galactic north),
+ * orbits circle the target, zoom closes on it.
+ */
+export interface Drive {
+  forward: number;
+  right: number;
+  up: number;
+  orbitRight: number;
+  orbitUp: number;
+  zoomIn: number;
+}
+
+/** Keyboard speeds: moves in view distances, orbits in radians, zoom in e-folds, all per second. */
+const MOVE_SPEED = 1.2;
+const ORBIT_SPEED = 1.6;
+const ZOOM_SPEED = 1.6;
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
+
 const BACKGROUND = new THREE.Vector3(3, 4, 10).divideScalar(255);
 /** Frame rate while nothing moves (the location marker still pulses). */
 const IDLE_FPS = 12;
@@ -61,6 +81,7 @@ export class View {
   private awakeUntil = 0;
   private lastFrame = 0;
   private flight: { from: THREE.Vector3; to: THREE.Vector3; fromDist: number; toDist: number; start: number; duration: number } | null = null;
+  private driver: (() => Drive) | null = null;
 
   constructor(readonly container: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
@@ -134,6 +155,11 @@ export class View {
     this.callbacks.push(cb);
   }
 
+  /** Where keyboard flight comes from; read every frame before the controls update. */
+  setDriver(driver: () => Drive): void {
+    this.driver = driver;
+  }
+
   /** Puts the camera `distance` ly from `target`, looking along `direction`. */
   lookAt(target: THREE.Vector3, distance: number, direction = new THREE.Vector3(0, 0.75, 0.66)): void {
     this.flight = null;
@@ -168,6 +194,7 @@ export class View {
       const dt = now - this.lastFrame;
       this.lastFrame = now;
       this.stepFlight(now);
+      this.stepDrive(dt);
       this.controls.update();
       for (const cb of this.callbacks) cb(now, dt);
       this.render();
@@ -199,6 +226,35 @@ export class View {
     this.controls.target.lerpVectors(f.from, f.to, e);
     this.camera.position.copy(this.controls.target).addScaledVector(dir, dist);
     if (t >= 1) this.flight = null;
+  }
+
+  private stepDrive(dt: number): void {
+    const d = this.driver?.();
+    if (!d || !(d.forward || d.right || d.up || d.orbitRight || d.orbitUp || d.zoomIn)) return;
+    // Taking the controls cancels a flight, as a drag does.
+    this.flight = null;
+    // The first frame after idling can be a long one.
+    dt = Math.min(dt, 0.1);
+    const target = this.controls.target;
+    const offset = this.camera.position.clone().sub(target);
+
+    // Ahead is the camera's heading flattened onto the plane, so W goes the
+    // same way however steeply the camera looks down.
+    const ahead = new THREE.Vector3(-offset.x, 0, -offset.z).normalize();
+    const right = new THREE.Vector3(-ahead.z, 0, ahead.x);
+    const move = new THREE.Vector3().addScaledVector(ahead, d.forward).addScaledVector(right, d.right).addScaledVector(WORLD_UP, d.up);
+    if (move.lengthSq() > 0) target.add(move.setLength(MOVE_SPEED * offset.length() * dt));
+
+    const s = new THREE.Spherical().setFromVector3(offset);
+    s.theta += d.orbitRight * ORBIT_SPEED * dt;
+    s.phi = THREE.MathUtils.clamp(s.phi - d.orbitUp * ORBIT_SPEED * dt, 0.01, Math.PI - 0.01);
+    s.radius = THREE.MathUtils.clamp(
+      s.radius * Math.exp(-d.zoomIn * ZOOM_SPEED * dt),
+      this.controls.minDistance,
+      this.controls.maxDistance,
+    );
+    this.camera.position.copy(target).add(offset.setFromSpherical(s));
+    this.wake();
   }
 
   private resize(): void {

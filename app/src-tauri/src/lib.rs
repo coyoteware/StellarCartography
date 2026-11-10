@@ -9,6 +9,7 @@ mod data;
 mod details;
 mod settings;
 
+use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -129,6 +130,7 @@ struct SettingsView {
     details_source: OnlineSource,
     update_reminders: bool,
     view: ViewSettings,
+    keys: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Serialize, Clone)]
@@ -370,6 +372,7 @@ fn get_settings(state: State<AppState>) -> CmdResult<SettingsView> {
         details_source: settings.details_source,
         update_reminders: settings.update_reminders,
         view: settings.view.clone(),
+        keys: settings.keys.clone(),
     })
 }
 
@@ -378,6 +381,17 @@ fn save_view_settings(state: State<AppState>, view: ViewSettings) -> CmdResult<(
     let mut settings = state.settings.lock().map_err(err)?;
     if settings.view != view {
         settings.view = view;
+        save_settings(&state, &settings)?;
+    }
+    Ok(())
+}
+
+/// Saves the keyboard shortcuts the user changed (the web view owns the defaults).
+#[tauri::command]
+fn save_keys(state: State<AppState>, keys: BTreeMap<String, Vec<String>>) -> CmdResult<()> {
+    let mut settings = state.settings.lock().map_err(err)?;
+    if settings.keys != keys {
+        settings.keys = keys;
         save_settings(&state, &settings)?;
     }
     Ok(())
@@ -929,6 +943,7 @@ pub fn run() {
             visited_systems,
             get_settings,
             save_view_settings,
+            save_keys,
             use_data_dir,
             set_journal_dir,
             pick_folder,

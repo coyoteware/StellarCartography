@@ -68,6 +68,35 @@ The journal folder defaults to
 in Settings, or override it with `ED_JOURNAL_DIR`. Settings are saved in
 `%APPDATA%\io.github.stellarcartography.viewer\settings.json`.
 
+## Keyboard
+
+The map flies from the keyboard as well as the mouse. Every key can be
+changed: press F1 (or Settings → Keyboard → "Change keys…"), click a key, then
+press the new one. Esc cancels and Backspace clears it. Each action has two
+keys. Giving an action a key another one had takes it from that one, and the
+list says so. ↺ puts a row back to its defaults, and "Reset all keys" puts back
+every row.
+
+| Action | Keys |
+| --- | --- |
+| Move forward, back, left, right | W A S D, or the arrow keys |
+| Move up, down (galactic north) | R, F, or Page Up, Page Down |
+| Orbit left, right, up, down | Q, E, T, G |
+| Zoom in, out | Z, X, or =, - |
+| Jump to Sol, the whole galaxy, your commander, home, the squadron capital | 1 to 5 (C and Home also work for commander and home) |
+| Galaxy glow, known systems, travel history, points of interest on/off | Shift+1 to Shift+4 |
+| Search | / or Ctrl+F |
+| Places open/closed | P |
+| Settings | Ctrl+, |
+| The list of keys | F1 or Shift+/ |
+
+Moves keep to the galactic plane whichever way the camera looks, and their
+speed scales with how far out you are. Keys work on the physical key, so WASD
+stays in the same place on AZERTY and other layouts, and the list names keys
+as your layout prints them. Keys do nothing while you type in a box, and only
+the Settings and key-list keys work while one of those is open. Changed keys
+are saved in settings.json under `keys`.
+
 ## Map layers
 
 Layers → **Colour systems by** draws every populated system as a coloured dot

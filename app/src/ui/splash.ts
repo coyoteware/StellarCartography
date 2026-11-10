@@ -14,17 +14,7 @@ const QUOTES: Quote[] = [
   { text: "Let’s see what’s out there.", from: tng("Encounter at Farpoint") },
   { text: "If we’re going to be damned, let’s be damned for what we really are.", from: tng("Encounter at Farpoint") },
   { text: "Shut up, Wesley!", from: tng("Datalore") },
-  { text: "Things are only impossible until they’re not.", from: tng("When the Bough Breaks") },
-  { text: "No being is so important that he can usurp the rights of another.", from: tng("The Schizoid Man") },
-  { text: "Starfleet was founded to seek out new life. Well, there it sits!", from: tng("The Measure of a Man") },
-  {
-    text: "Open your mind to the past. Art, history, philosophy. And all this may mean something.",
-    from: tng("Samaritan Snare"),
-  },
-  {
-    text: "It is possible to commit no mistakes and still lose. That is not a weakness; that is life.",
-    from: tng("Peak Performance"),
-  },
+  { text: "No person is so important that he can usurp the rights of another.", from: tng("The Schizoid Man") },
   { text: "A matter of internal security: the age-old cry of the oppressor.", from: tng("The Hunted") },
   { text: "There are times, sir, when men of good conscience cannot blindly follow orders.", from: tng("The Offspring") },
   {
@@ -33,18 +23,8 @@ const QUOTES: Quote[] = [
       "the first freedom denied, chains us all irrevocably.",
     from: tng("The Drumhead"),
   },
-  {
-    text:
-      "Villains who twirl their moustaches are easy to spot. Those who clothe themselves in good deeds " +
-      "are well camouflaged.",
-    from: tng("The Drumhead"),
-  },
-  {
-    text: "I’d be delighted to offer any advice I have on understanding women. When I have some, I’ll let you know.",
-    from: tng("In Theory"),
-  },
+
   { text: "In my experience, communication is a matter of patience, imagination.", from: tng("Darmok") },
-  { text: "The first duty of every Starfleet officer is to the truth.", from: tng("The First Duty") },
   {
     text: "Seize the time, Meribor. Live now. Make now always the most precious time. Now will never come again.",
     from: tng("The Inner Light"),
@@ -56,8 +36,6 @@ const QUOTES: Quote[] = [
   { text: "Make it so.", from: SERIES },
   { text: "I rather believe that time is a companion who goes with us on the journey.", from: "Star Trek Generations" },
   { text: "What we leave behind is not as important as how we’ve lived.", from: "Star Trek Generations" },
-  { text: "The line must be drawn here! This far, no further!", from: "Star Trek: First Contact" },
-  { text: "We work to better ourselves and the rest of humanity.", from: "Star Trek: First Contact" },
 ];
 
 /** Where the last quote shown is remembered, so two starts in a row differ. */

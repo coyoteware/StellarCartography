@@ -252,6 +252,29 @@
           A bigger point budget shows more stars at once but costs more GPU time; 2M suits integrated graphics.
         </p>
       </section>
+      <section>
+        <h2>Keyboard</h2>
+        <p class="muted small">
+          Fly the map, jump to places, switch layers and open panels from the keyboard. Every key can be changed.
+        </p>
+        <div class="buttons">
+          <button id="set-keys" type="button">Change keys…</button>
+        </div>
+      </section>
+    </div>
+
+    <!-- Every keyboard action and its two keys; ui/keys.ts fills the list. -->
+    <div class="card" id="keys" hidden>
+      <header>
+        <h1>Keyboard</h1>
+        <button id="keys-close" type="button" class="close" aria-label="Close">×</button>
+      </header>
+      <p class="muted small">Click a key, then press the new one. Esc cancels; Backspace clears it.</p>
+      <p id="keys-note" class="small" role="status" hidden></p>
+      <div id="keys-list"></div>
+      <div class="buttons">
+        <button id="keys-reset" type="button">Reset all keys</button>
+      </div>
     </div>
 
     <script type="module" src="/src/main.ts"></script>

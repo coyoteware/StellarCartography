@@ -1,6 +1,6 @@
 // Settings panel: catalogue folder and rebuilds, journal folder, the
-// populated systems behind the overlay layers, the points of interest, and
-// display preferences (point budget, brightness).
+// populated systems behind the overlay layers, the points of interest,
+// display preferences (point budget, brightness), and the way to the keys.
 
 import {
   datasetInfo,
@@ -44,6 +44,8 @@ export interface SettingsDeps {
   onPoiUpdate: () => void;
   /** The update-reminders switch changed (it's saved already). */
   onReminders: (on: boolean) => void;
+  /** Opens the key list (Settings closes first). */
+  onKeys: () => void;
 }
 
 export class SettingsPanel {
@@ -117,6 +119,15 @@ export class SettingsPanel {
       exposure.value = "0";
       this.deps.onView({ ...this.deps.view(), exposure: 1 });
     });
+
+    $("set-keys").addEventListener("click", () => {
+      this.close();
+      this.deps.onKeys();
+    });
+  }
+
+  get shown(): boolean {
+    return !this.el.hidden;
   }
 
   async open(): Promise<void> {
