@@ -45,6 +45,10 @@ while the dev server keeps running, or Q to stop both. In the app, Ctrl+Shift+I
 opens the WebView2 dev tools (so does right-click → Inspect on a panel; the map
 keeps right-click for panning).
 
+A splash covers the window while the map loads in, with a line from Captain
+Picard picked at random. It lifts once the opening view is drawn and the quote
+has had time to be read; a click or a key press lifts it sooner.
+
 On first run the app offers to **download and build** the catalogue (streams
 about 3.4 GB from EDSM, nothing kept but the result; about 10 GB of data;
 10–15 minutes), or to **use an existing build** folder. Later, Settings →
