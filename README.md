@@ -1,5 +1,6 @@
-# StellarCartography
+# StellarCartography    <img src="app/public/favicon.ico">
 
+<img src="docs/images/sc3.png">
 
 Standalone galaxy map viewer for Elite: Dangerous. Intended for personal use, so YMMV
 
