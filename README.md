@@ -1,10 +1,7 @@
 # StellarCartography
-standalone viewer for the Elite: Dangerous galaxy map
 
-**Status: personal-use desktop app (Windows).** The original feasibility study,
-measurements and MVP status are in [docs/feasibility-report.md](docs/feasibility-report.md).
-How the data is downloaded, processed and stored is in
-[docs/data-pipeline.md](docs/data-pipeline.md).
+Standalone galaxy map viewer for Elite: Dangerous. Intended for personal use, so YMMV
+
 
 A desktop app (Tauri 2 + three.js) that renders every system in the EDSM
 catalogue as a level-of-detail point cloud over a generated galaxy backdrop,
