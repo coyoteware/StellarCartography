@@ -53,6 +53,11 @@
   scrollbar-color: var(--line-strong) transparent;
 }
 
+/* Buttons, rows and panels set their own display; hidden must still hide them. */
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;
@@ -376,11 +381,6 @@ input[type="range"] {
   flex: 0 1 auto;
   display: flex;
   flex-direction: column;
-}
-
-/* Several parts set their own display; hidden must still hide them. */
-#places-panel [hidden] {
-  display: none !important;
 }
 
 .places-toggle {
