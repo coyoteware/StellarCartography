@@ -18,10 +18,12 @@
         <input id="search" type="search" placeholder="Search systems and places…" autocomplete="off" spellcheck="false" />
         <ul id="search-results" hidden></ul>
         <div class="buttons">
-          <button id="go-sol" type="button">Sol</button>
-          <button id="go-galaxy" type="button">Galaxy</button>
-          <button id="go-cmdr" type="button" hidden>Commander</button>
-          <button id="open-settings" type="button" class="push" title="Settings">Settings</button>
+          <div class="segs" role="group" aria-label="Jump to">
+            <button id="go-sol" type="button">Sol</button>
+            <button id="go-galaxy" type="button">Galaxy</button>
+            <button id="go-cmdr" type="button" hidden>Commander</button>
+          </div>
+          <button id="open-settings" type="button" class="quiet push" title="Settings">Settings</button>
         </div>
       </div>
 
@@ -32,6 +34,7 @@
          (scrolls when it doesn't fit). -->
     <div id="right-column">
       <div class="panel" id="layers-panel">
+        <header class="panel-head"><h2>Layers</h2></header>
         <label><input type="checkbox" id="layer-glow" checked /> Galaxy glow</label>
         <label><input type="checkbox" id="layer-stars" checked /> Known systems</label>
         <label><input type="checkbox" id="layer-route" checked /> Travel history</label>
@@ -49,7 +52,11 @@
         </div>
       </div>
 
-      <div class="panel" id="info-panel" tabindex="-1" hidden></div>
+      <!-- The elbow frame hides itself while the panel inside is hidden. -->
+      <div id="info-frame">
+        <span class="elbow-title">System</span>
+        <div class="panel" id="info-panel" tabindex="-1" hidden></div>
+      </div>
     </div>
 
     <div id="hud"></div>

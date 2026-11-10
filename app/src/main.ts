@@ -1,3 +1,8 @@
+import "@fontsource/antonio/500.css";
+import "@fontsource/saira/400.css";
+import "@fontsource/saira/600.css";
+import "@fontsource/jetbrains-mono/400.css";
+import "@fontsource/jetbrains-mono/500.css";
 import * as THREE from "three";
 import {
   buildStatus,
