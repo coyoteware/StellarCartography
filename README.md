@@ -1,5 +1,6 @@
 # StellarCartography
 
+
 Standalone galaxy map viewer for Elite: Dangerous. Intended for personal use, so YMMV
 
 
