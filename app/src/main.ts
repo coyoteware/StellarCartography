@@ -36,10 +36,13 @@ import { PlacesUi, describePoi } from "./ui/places";
 import { Reminders } from "./ui/reminders";
 import { setupSearch } from "./ui/search";
 import { SettingsPanel } from "./ui/settings";
+import { Splash } from "./ui/splash";
 import { Toasts, errorText } from "./ui/toast";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
+// First, so it's reading its quote while everything below is set up.
+const splash = new Splash($("splash"));
 const view = new View($("viewport"));
 const hud = new Hud($("hud"));
 const toasts = new Toasts($("toasts"));
@@ -76,6 +79,8 @@ let poiLayer: PoiLayer | null = null;
 let updateReminders = true;
 /** When the catalogue on show was built (Unix seconds). */
 let catalogueBuiltAt: number | null = null;
+/** Called once the stars of the opening view are in (see `starsDrawn`). */
+let onStarsDrawn: (() => void) | null = null;
 
 const systemPanel = new SystemPanel($("info-panel"), {
   commanderPos: () => commander.current()?.pos,
@@ -256,9 +261,15 @@ async function loadGalaxy(status: Extract<DataStatus, { state: "ready" }>): Prom
     toasts.error(`Couldn't load the galaxy backdrop: ${errorText(g.reason)}`, { action: openSettings });
   }
   applyView(viewSettings, false);
-  void overlay.load();
-  void places.load();
+  const layers = [overlay.load(), places.load()];
   reminders.start();
+  // The splash lifts when this returns: by then the opening view is whole.
+  await Promise.all([...layers, starsDrawn()]);
+}
+
+/** Resolves when the star tiles the current view asks for have loaded (or failed). */
+function starsDrawn(): Promise<void> {
+  return new Promise((resolve) => (onStarsDrawn = resolve));
 }
 
 // --- Commander ---------------------------------------------------------------
@@ -527,6 +538,10 @@ view.onFrame((now, dt) => {
     cloud.update(view.camera, view.height, view.pixelRatio);
     if (cloud.busy) view.wake();
   }
+  if (onStarsDrawn && !(cloud?.object.visible && cloud.busy)) {
+    onStarsDrawn();
+    onStarsDrawn = null;
+  }
   commander.update(now);
   overlay.layer?.update(view.pixelRatio);
   places.layer?.update(view.camera, canvas.clientWidth, canvas.clientHeight, view.pixelRatio, !view.idle);
@@ -586,8 +601,9 @@ async function boot(): Promise<void> {
   if (!view.hdr) console.warn("No half-float render targets: dense regions will clip instead of tone mapping.");
 
   const [status, build] = await Promise.all([datasetInfo(), buildStatus()]);
+  let galaxy: Promise<void> | null = null;
   if (status.state === "ready") {
-    void loadGalaxy(status);
+    galaxy = loadGalaxy(status);
     if (build) catalogue.resume(build, true);
   } else if (build) {
     catalogue.resume(build, false);
@@ -602,8 +618,10 @@ async function boot(): Promise<void> {
     console.error("commander data:", e);
     toasts.error(`Couldn't read the commander data: ${errorText(e)}`);
   }
+  await galaxy;
 }
 
 showGalaxy();
 view.start();
-void boot();
+// The splash covers all of that loading in; whatever went wrong, the app shows.
+void boot().finally(() => splash.done());

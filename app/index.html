@@ -65,6 +65,23 @@
       </div>
     </div>
 
+    <!-- Covers everything while the galaxy loads in; splash.ts picks the quote
+         and lifts it. -->
+    <div id="splash" role="status" aria-label="Starting up">
+      <div class="splash-body">
+        <header class="panel-head"><h2>Stellar Cartography</h2></header>
+        <figure>
+          <blockquote></blockquote>
+          <figcaption>
+            <span class="splash-who">Captain Jean-Luc Picard</span>
+            <span class="splash-from"></span>
+          </figcaption>
+        </figure>
+        <div class="bar"><div id="splash-bar"></div></div>
+        <div class="splash-status">Stand by</div>
+      </div>
+    </div>
+
     <div id="hud"></div>
     <div id="help">Drag to rotate · right-drag to pan · scroll to zoom · click a star or marker for details</div>
     <div id="hover-label" hidden></div>
