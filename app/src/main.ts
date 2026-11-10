@@ -158,6 +158,13 @@ const openSettings = { label: "Settings", run: () => void settingsPanel.open() }
 const showGalaxy = () => view.lookAt(edToWorld(SGR_A), 95_000, new THREE.Vector3(0, 0.8, 0.6));
 const showSol = () => view.flyTo(edToWorld(SOL), 120);
 
+/**
+ * Systems with their own jump-to button, as the catalogue has them. No rowid:
+ * rebuilds renumber the rows, and the details only need the id64.
+ */
+const HOME: SystemInfo = { rowid: null, id64: "2558223422178", name: "Synuefe GN-I c26-9", pos: [278.5625, -59.3125, 71.46875] };
+const SQUADRON_CAPITAL: SystemInfo = { rowid: null, id64: "869521148275", name: "HIP 49987", pos: [252.59375, -46.09375, 87.6875] };
+
 // --- View settings -----------------------------------------------------------
 
 let saveTimer = 0;
@@ -372,6 +379,10 @@ $("go-cmdr").addEventListener("click", () => {
   const cur = commander.current();
   if (cur) view.flyTo(edToWorld(cur.pos), 80);
 });
+// These sit among thousands of neighbours, so they're selected (marker and
+// details) as well as flown to.
+$("go-home").addEventListener("click", () => select(HOME, true));
+$("go-squadron").addEventListener("click", () => select(SQUADRON_CAPITAL, true));
 $("open-settings").addEventListener("click", () => void settingsPanel.open());
 for (const layer of ["glow", "stars", "route", "poi"] as const) {
   $<HTMLInputElement>(`layer-${layer}`).addEventListener("change", (e) =>
