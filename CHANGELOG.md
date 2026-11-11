@@ -11,6 +11,14 @@
   waypoint list follows your jumps, and the next system can be copied to the
   clipboard after each jump for the in-game galaxy map. The route survives a
   restart.
+- **Intergalactic backdrop.** The map now sits in intergalactic space rather
+  than flat black. The sky holds distant galaxies but no foreground stars:
+  thousands of them, mostly unresolved smudges, gathered into clusters,
+  groups and filaments, the faintest reddened by distance. Andromeda and
+  Triangulum are in their true directions. The Magellanic Clouds sit at
+  their real distances, so they shift as you fly. The Milky Way's dust dims
+  whatever lies behind its disc. Layers → "Distant galaxies" (Shift+6)
+  turns it off.
 
 ## 0.2.0 (2026-11-10)
 

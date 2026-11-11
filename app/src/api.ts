@@ -39,6 +39,8 @@ export interface ViewSettings {
   poi: boolean;
   /** Point-of-interest categories switched off (a `PoiCategory` id, see poi.ts). */
   poiHidden: string[];
+  /** Draw the distant galaxies behind the Milky Way. */
+  backdrop: boolean;
 }
 
 /** Where the details panel looks systems up online; the other site is the fallback. */

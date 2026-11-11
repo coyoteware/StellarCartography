@@ -6,8 +6,9 @@ Standalone galaxy map viewer for Elite: Dangerous. Intended for personal use, so
 
 
 A desktop app (Tauri 2 + three.js) that renders every system in the EDSM
-catalogue as a level-of-detail point cloud over a generated galaxy backdrop,
-with your commander's travel history read live from the game's journal files.
+catalogue as a level-of-detail point cloud over a generated galaxy glow, set
+against intergalactic space, with your commander's travel history read live
+from the game's journal files.
 It keeps its own copy of the catalogue (about 10 GB), built from EDSM's nightly
 dump on first run and rebuilt from Settings whenever you like.
 
@@ -83,7 +84,7 @@ every row.
 | Orbit left, right, up, down | Q, E, T, G |
 | Zoom in, out | Z, X, or =, - |
 | Jump to Sol, the whole galaxy, your commander, home, the squadron capital | 1 to 5 (C and Home also work for commander and home) |
-| Galaxy glow, known systems, travel history, points of interest on/off | Shift+1 to Shift+4 |
+| Galaxy glow, known systems, travel history, points of interest, plotted route, distant galaxies on/off | Shift+1 to Shift+6 |
 | Search | / or Ctrl+F |
 | Places open/closed | P |
 | Settings | Ctrl+, |
@@ -239,5 +240,9 @@ from the Actions tab with "Run workflow".
 - The galaxy glow ray-marches a density map built from id64 boxel indices. The
   idea comes from [spansh/elite-galaxy-map](https://github.com/spansh/elite-galaxy-map);
   the shader and data here are our own.
+- The intergalactic backdrop is generated: a fixed-seed sky of distant galaxies
+  in clusters and filaments, with no foreground stars. Andromeda, Triangulum
+  and the Magellanic Clouds are placed from their published positions and
+  distances.
 - Elite: Dangerous is © Frontier Developments plc. This project is not
   affiliated with or endorsed by Frontier.

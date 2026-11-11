@@ -89,14 +89,17 @@ export class GalaxyGlow {
     return new GalaxyGlow(texture);
   }
 
-  private constructor(texture: THREE.Texture) {
+  private constructor(
+    /** The top-down density map; the backdrop reads the Milky Way's dust from it. */
+    readonly density: THREE.Texture,
+  ) {
     const centre = edToWorld([MAP_MIN_X + MAP_SIZE / 2, 0, MAP_MIN_Z + MAP_SIZE / 2]);
     const half = new THREE.Vector3(MAP_SIZE / 2, HALF_THICKNESS, MAP_SIZE / 2);
     this.material = new THREE.ShaderMaterial({
       vertexShader,
       fragmentShader,
       uniforms: {
-        uDensity: { value: texture },
+        uDensity: { value: density },
         uBoxMin: { value: centre.clone().sub(half) },
         uBoxMax: { value: centre.clone().add(half) },
         uCore: { value: edToWorld(SGR_A) },

@@ -24,6 +24,7 @@ import {
 } from "./api";
 import { Bindings, Keyboard, chordLabel, loadLayout } from "./keys";
 import type { Poi } from "./poi";
+import { Backdrop } from "./renderer/backdrop";
 import { CommanderLayer, SelectionMarker } from "./renderer/commander";
 import { SGR_A, SOL, edToWorld, worldToEd } from "./renderer/coords";
 import { GalaxyGlow } from "./renderer/glow";
@@ -56,6 +57,9 @@ const commander = new CommanderLayer();
 const selection = new SelectionMarker();
 const plot = new PlotLayer();
 view.overlay.add(commander.object, selection.object, plot.object);
+// Needs no data, so the sky is there from the first frame, setup included.
+const backdrop = new Backdrop();
+view.scene.add(backdrop.mesh);
 
 let cloud: PointCloud | null = null;
 let glow: GalaxyGlow | null = null;
@@ -74,6 +78,7 @@ let viewSettings: ViewSettings = {
   highlights: {},
   poi: true,
   poiHidden: ["planetaryNebula"],
+  backdrop: true,
 };
 let reportedTileFailures = 0;
 /**
@@ -200,11 +205,12 @@ const SQUADRON_CAPITAL: SystemInfo = { rowid: null, id64: "869521148275", name: 
 
 let saveTimer = 0;
 
-/** Under an overlay layer the stars and glow step back so the coloured dots read. */
+/** Under an overlay layer the stars, glow and sky step back so the coloured dots read. */
 function applyDimming(): void {
   const dim = overlay.active;
   if (cloud) cloud.gain = dim ? 0.35 : 1;
   if (glow) glow.brightness = dim ? 0.45 : 1;
+  backdrop.brightness = dim ? 0.45 : 1;
 }
 
 /** Applies display preferences to the scene and (debounced) saves them. */
@@ -216,6 +222,7 @@ function applyView(next: ViewSettings, persist = true): void {
     cloud.object.visible = next.stars;
   }
   if (glow) glow.mesh.visible = next.glow;
+  backdrop.mesh.visible = next.backdrop;
   commander.object.visible = next.route;
   plot.object.visible = next.plot;
   $<HTMLInputElement>("layer-glow").checked = next.glow;
@@ -223,6 +230,7 @@ function applyView(next: ViewSettings, persist = true): void {
   $<HTMLInputElement>("layer-route").checked = next.route;
   $<HTMLInputElement>("layer-plot").checked = next.plot;
   $<HTMLInputElement>("layer-poi").checked = next.poi;
+  $<HTMLInputElement>("layer-backdrop").checked = next.backdrop;
   overlay.sync();
   places.sync();
   applyDimming();
@@ -285,8 +293,9 @@ async function loadGalaxy(status: Extract<DataStatus, { state: "ready" }>): Prom
   if (g.status === "fulfilled") {
     glow = g.value;
     view.scene.add(glow.mesh);
+    backdrop.setDust(glow.density);
   } else {
-    toasts.error(`Couldn't load the galaxy backdrop: ${errorText(g.reason)}`, { action: openSettings });
+    toasts.error(`Couldn't load the galaxy glow: ${errorText(g.reason)}`, { action: openSettings });
   }
   applyView(viewSettings, false);
   const layers = [overlay.load(), places.load()];
@@ -430,7 +439,7 @@ $("go-cmdr").addEventListener("click", goCommander);
 $("go-home").addEventListener("click", goHome);
 $("go-squadron").addEventListener("click", goSquadron);
 $("open-settings").addEventListener("click", () => void settingsPanel.open());
-for (const layer of ["glow", "stars", "route", "plot", "poi"] as const) {
+for (const layer of ["glow", "stars", "route", "plot", "poi", "backdrop"] as const) {
   $<HTMLInputElement>(`layer-${layer}`).addEventListener("change", (e) =>
     applyView({ ...viewSettings, [layer]: (e.target as HTMLInputElement).checked }),
   );
@@ -457,6 +466,7 @@ for (const [id, layer] of [
   ["toggleRoute", "route"],
   ["togglePoi", "poi"],
   ["togglePlot", "plot"],
+  ["toggleBackdrop", "backdrop"],
 ] as const) {
   keyboard.on(id, () => applyView({ ...viewSettings, [layer]: !viewSettings[layer] }));
 }
@@ -681,6 +691,7 @@ if (import.meta.env.DEV) {
       get glow() {
         return glow;
       },
+      backdrop,
       THREE,
       edToWorld,
     },

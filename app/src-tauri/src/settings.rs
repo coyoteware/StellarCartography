@@ -58,6 +58,8 @@ pub struct ViewSettings {
     pub poi: bool,
     /// Point-of-interest categories switched off, in the directory and on the map.
     pub poi_hidden: Vec<String>,
+    /// Draw the distant galaxies behind the Milky Way.
+    pub backdrop: bool,
 }
 
 impl Default for ViewSettings {
@@ -74,6 +76,7 @@ impl Default for ViewSettings {
             poi: true,
             // Thousands of catalogue entries: they'd crowd out everything else.
             poi_hidden: vec!["planetaryNebula".into()],
+            backdrop: true,
         }
     }
 }
