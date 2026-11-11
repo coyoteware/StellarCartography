@@ -29,6 +29,7 @@ import { SGR_A, SOL, edToWorld, worldToEd } from "./renderer/coords";
 import { GalaxyGlow } from "./renderer/glow";
 import { PointCloud } from "./renderer/pointcloud";
 import type { PoiLayer } from "./renderer/poi";
+import { PlotLayer } from "./renderer/route";
 import { View } from "./renderer/view";
 import { CatalogueUi } from "./ui/catalogue";
 import { Hud } from "./ui/hud";
@@ -37,6 +38,7 @@ import { KeysCard } from "./ui/keys";
 import { OverlayUi } from "./ui/overlay";
 import { PlacesUi, describePoi } from "./ui/places";
 import { Reminders } from "./ui/reminders";
+import { RouteUi } from "./ui/route";
 import { setupSearch } from "./ui/search";
 import { SettingsPanel } from "./ui/settings";
 import { Splash } from "./ui/splash";
@@ -52,7 +54,8 @@ const toasts = new Toasts($("toasts"));
 const catalogue = new CatalogueUi(toasts);
 const commander = new CommanderLayer();
 const selection = new SelectionMarker();
-view.overlay.add(commander.object, selection.object);
+const plot = new PlotLayer();
+view.overlay.add(commander.object, selection.object, plot.object);
 
 let cloud: PointCloud | null = null;
 let glow: GalaxyGlow | null = null;
@@ -66,6 +69,7 @@ let viewSettings: ViewSettings = {
   glow: true,
   stars: true,
   route: true,
+  plot: true,
   overlay: "none",
   highlights: {},
   poi: true,
@@ -151,6 +155,15 @@ const settingsPanel = new SettingsPanel({
 overlay.onStatus = () => settingsPanel.renderPopulated();
 places.onStatus = () => settingsPanel.renderPoi();
 
+const routeUi = new RouteUi({
+  toasts,
+  layer: plot,
+  fid: () => selectedFid,
+  currentSystem: () => commander.current()?.system ?? null,
+  onPick: (s) => select(s, true),
+  onChange: () => view.wake(),
+});
+
 const keyboard = new Keyboard({ modal: () => settingsPanel.shown || keysCard.shown });
 const keysCard = new KeysCard({
   keyboard,
@@ -204,9 +217,11 @@ function applyView(next: ViewSettings, persist = true): void {
   }
   if (glow) glow.mesh.visible = next.glow;
   commander.object.visible = next.route;
+  plot.object.visible = next.plot;
   $<HTMLInputElement>("layer-glow").checked = next.glow;
   $<HTMLInputElement>("layer-stars").checked = next.stars;
   $<HTMLInputElement>("layer-route").checked = next.route;
+  $<HTMLInputElement>("layer-plot").checked = next.plot;
   $<HTMLInputElement>("layer-poi").checked = next.poi;
   overlay.sync();
   places.sync();
@@ -383,6 +398,7 @@ async function loadCommander(): Promise<void> {
     systemPanel.refreshIfShowing(jump.id64);
     if (fid === selectedFid) {
       commander.addJump(jump);
+      routeUi.onJump(jump);
       updateLocation();
       view.wake();
     }
@@ -414,7 +430,7 @@ $("go-cmdr").addEventListener("click", goCommander);
 $("go-home").addEventListener("click", goHome);
 $("go-squadron").addEventListener("click", goSquadron);
 $("open-settings").addEventListener("click", () => void settingsPanel.open());
-for (const layer of ["glow", "stars", "route", "poi"] as const) {
+for (const layer of ["glow", "stars", "route", "plot", "poi"] as const) {
   $<HTMLInputElement>(`layer-${layer}`).addEventListener("change", (e) =>
     applyView({ ...viewSettings, [layer]: (e.target as HTMLInputElement).checked }),
   );
@@ -440,6 +456,7 @@ for (const [id, layer] of [
   ["toggleStars", "stars"],
   ["toggleRoute", "route"],
   ["togglePoi", "poi"],
+  ["togglePlot", "plot"],
 ] as const) {
   keyboard.on(id, () => applyView({ ...viewSettings, [layer]: !viewSettings[layer] }));
 }
@@ -449,6 +466,7 @@ keyboard.on("search", () => {
   search.select();
 });
 keyboard.on("places", () => places.toggleOpen());
+keyboard.on("route", () => routeUi.toggleOpen());
 // One card at a time: each of these closes the other.
 keyboard.on("settings", () => {
   keysCard.close();
@@ -619,6 +637,7 @@ view.onFrame((now, dt) => {
     onStarsDrawn = null;
   }
   commander.update(now);
+  plot.update(now);
   overlay.layer?.update(view.pixelRatio);
   places.layer?.update(view.camera, canvas.clientWidth, canvas.clientHeight, view.pixelRatio, !view.idle);
   const stats = cloud?.stats() ?? null;
@@ -650,6 +669,7 @@ if (import.meta.env.DEV) {
       catalogue,
       overlay,
       places,
+      routeUi,
       reminders,
       settingsPanel,
       systemPanel,
@@ -698,6 +718,8 @@ async function boot(): Promise<void> {
     console.error("commander data:", e);
     toasts.error(`Couldn't read the commander data: ${errorText(e)}`);
   }
+  // After the commander, so the saved route and ship know who's flying.
+  void routeUi.load();
   await galaxy;
 }
 

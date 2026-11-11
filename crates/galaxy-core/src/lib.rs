@@ -5,12 +5,15 @@
 //! * [`journal`]: parsing the jump events out of the player journal.
 //! * [`details`]: system details (factions, Powerplay, stations) from the
 //!   journal, Spansh and EDSM in one model.
+//! * [`ship`]: the commander's ship from the journal's `Loadout` event, as
+//!   the fuel model Spansh's route plotters ask for.
 //! * [`visited`]: reading the game's `VisitedStarsCache.dat`.
 
 pub mod details;
 pub mod id64;
 pub mod journal;
 pub mod octree;
+pub mod ship;
 pub mod visited;
 
 /// A galactic position in light years, in the game's own coordinate frame

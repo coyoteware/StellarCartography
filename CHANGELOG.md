@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### New
+- **Route plotting.** A Route panel under the search box plots routes on
+  Spansh: the neutron plotter (jump range and efficiency), the fuel-exact
+  galaxy plotter (using the ship from your journals, engineering included),
+  and the fleet-carrier router (with tritium stops, multiple destinations and
+  squadron carriers). The route draws on the map as its own layer, the
+  waypoint list follows your jumps, and the next system can be copied to the
+  clipboard after each jump for the in-game galaxy map. The route survives a
+  restart.
+
 ## 0.2.0 (2026-11-10)
 
 ### New

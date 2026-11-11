@@ -7,6 +7,7 @@
 
 mod data;
 mod details;
+mod routes;
 mod settings;
 
 use std::collections::BTreeMap;
@@ -42,6 +43,9 @@ struct AppState {
     populated: Mutex<Option<PopulatedJob>>,
     poi: Mutex<Option<PoiJob>>,
     online: Online,
+    plotter: routes::Plotter,
+    /// Where the active plotted route is kept across restarts.
+    route_path: PathBuf,
 }
 
 /// The current data folder and, when it holds a usable build, the open dataset.
@@ -557,6 +561,44 @@ async fn system_details(
     Ok(galaxy_core::details::merge(galaxy_core::details::combine(journal, online), base))
 }
 
+// --- Route plotting ------------------------------------------------------------
+
+/// The ship to plot galaxy routes with: the newest `Loadout` in the journals
+/// for `fid` (or for any commander), reduced to its fuel model. `None` when
+/// the journals haven't recorded one.
+#[tauri::command]
+fn ship_loadout(state: State<AppState>, fid: Option<String>) -> CmdResult<Option<galaxy_core::ship::ShipSpec>> {
+    let mut source = state.commander.lock().map_err(err)?;
+    let Some(source) = source.as_mut() else { return Ok(None) };
+    let snapshot = source.loadout(fid.as_deref()).map_err(err)?;
+    Ok(snapshot.and_then(|s| galaxy_core::ship::parse_loadout(&s.line)))
+}
+
+/// Plots a route on Spansh (neutron, galaxy or fleet-carrier plotter, by the
+/// request's `mode`). Takes seconds to minutes: Spansh queues the job and
+/// this polls for the answer. A new plot or `cancel_plot` abandons it.
+#[tauri::command]
+async fn plot_route(state: State<'_, AppState>, request: routes::RouteRequest) -> CmdResult<routes::PlottedRoute> {
+    state.plotter.plot(request).await.map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+fn cancel_plot(state: State<AppState>) -> CmdResult<()> {
+    state.plotter.cancel();
+    Ok(())
+}
+
+#[tauri::command]
+fn saved_route(state: State<AppState>) -> CmdResult<Option<routes::SavedRoute>> {
+    Ok(routes::load_saved(&state.route_path))
+}
+
+/// Keeps the active route (and progress along it) across restarts; `None` clears it.
+#[tauri::command]
+fn save_route(state: State<AppState>, route: Option<routes::SavedRoute>) -> CmdResult<()> {
+    routes::store_saved(&state.route_path, route.as_ref()).map_err(|e| format!("couldn't save the route: {e}"))
+}
+
 /// Sites the details panel links to; nothing else is opened.
 const EXTERNAL_SITES: [&str; 4] = ["https://spansh.co.uk/", "https://inara.cz/", "https://www.edsm.net/", "https://edastro.com/"];
 
@@ -961,6 +1003,11 @@ pub fn run() {
             start_poi_update,
             cancel_poi_update,
             poi_update_status,
+            ship_loadout,
+            plot_route,
+            cancel_plot,
+            saved_route,
+            save_route,
         ])
         .setup(|app| {
             let paths = app.path();
@@ -981,6 +1028,8 @@ pub fn run() {
                 populated: Mutex::new(None),
                 poi: Mutex::new(None),
                 online,
+                plotter: routes::Plotter::default(),
+                route_path: local.join("route.json"),
             });
             spawn_journal_watcher(app.handle().clone());
             Ok(())

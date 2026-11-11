@@ -29,6 +29,8 @@ export interface ViewSettings {
   glow: boolean;
   stars: boolean;
   route: boolean;
+  /** Draw the plotted route (`route` is the travel history). */
+  plot: boolean;
   /** What colours the populated-systems overlay (an `OverlayId`, see overlays.ts); "none" hides it. */
   overlay: string;
   /** Per overlay, the categories picked out in colour; "" marks an empty colour slot. */
@@ -239,6 +241,112 @@ export interface SystemDetails {
   /** Pages about this system on EDSM, Inara and Spansh. */
   links: { label: string; url: string }[];
 }
+
+// --- Route plotting (app/src-tauri/src/routes.rs) ------------------------------
+
+/** A ship's fuel model from the journal's Loadout event (galaxy-core/src/ship.rs). */
+export interface ShipSpec {
+  /** When the loadout was written (ISO). */
+  timestamp: string;
+  /** Internal ship type ("corsair", "python_nx", ...). */
+  ship: string;
+  shipName: string;
+  shipIdent: string;
+  baseMass: number;
+  tankSize: number;
+  internalTankSize: number;
+  cargoCapacity: number;
+  /** The game's own current-fuel maximum range (ly). */
+  maxJumpRange: number;
+  fuelPower: number;
+  fuelMultiplier: number;
+  optimalMass: number;
+  maxFuelPerJump: number;
+  /** Guardian FSD booster range (ly), 0 without one. */
+  rangeBoost: number;
+  superchargeMultiplier: number;
+}
+
+export type RouteMode = "neutron" | "galaxy" | "carrier";
+
+export type RouteRequest =
+  | { mode: "neutron"; from: string; to: string; range: number; efficiency: number }
+  | {
+      mode: "galaxy";
+      source: string;
+      destination: string;
+      ship: ShipSpec;
+      cargo: number;
+      isSupercharged: boolean;
+      useSupercharge: boolean;
+      useInjections: boolean;
+      excludeSecondary: boolean;
+      refuelEveryScoopable: boolean;
+    }
+  | {
+      mode: "carrier";
+      source: string;
+      destinations: string[];
+      capacityUsed: number;
+      calculateStartingFuel: boolean;
+      squadron: boolean;
+    };
+
+/** One stop on a plotted route; which extras are filled depends on the plotter. */
+export interface Waypoint {
+  name: string;
+  id64: string | null;
+  pos: Vec3;
+  /** Light years from the previous waypoint. */
+  distance: number;
+  /** Light years still to go after this one. */
+  distanceLeft: number;
+  /** Neutron plotter: estimated jumps to get here from the previous waypoint. */
+  jumps: number | null;
+  neutron: boolean;
+  scoopable: boolean;
+  /** Scoop here (galaxy plotter) or load tritium here (carrier). */
+  refuel: boolean;
+  /** Carrier: tonnes of tritium to load here. */
+  restock: number | null;
+  icyRing: boolean;
+  pristine: boolean;
+  fuelUsed: number | null;
+  fuelLeft: number | null;
+  /** Carrier: one of the systems the route was asked to reach. */
+  destination: boolean;
+}
+
+export interface PlottedRoute {
+  mode: RouteMode;
+  source: string;
+  destination: string;
+  waypoints: Waypoint[];
+  /** Light years along the route. */
+  totalDistance: number;
+  /** Neutron: Spansh's estimate of real jumps; others: one per waypoint. */
+  totalJumps: number | null;
+  /** Unix seconds. */
+  plottedAt: number;
+}
+
+/** The active route as kept across restarts. */
+export interface SavedRoute {
+  route: PlottedRoute;
+  /** Index of the waypoint the commander has reached. */
+  progress: number;
+  /** Copy the next waypoint's name to the clipboard after each jump. */
+  copyNext: boolean;
+}
+
+/** The newest journal loadout for a commander (or any, when `fid` is unset). */
+export const shipLoadout = (fid?: string | null) => invoke<ShipSpec | null>("ship_loadout", { fid: fid ?? null });
+/** Plots on Spansh; takes seconds to minutes. Rejects with "cancelled" when superseded. */
+export const plotRoute = (request: RouteRequest) => invoke<PlottedRoute>("plot_route", { request });
+export const cancelPlot = () => invoke<void>("cancel_plot");
+export const savedRoute = () => invoke<SavedRoute | null>("saved_route");
+/** Persists the active route and progress; `null` clears it. */
+export const saveRoute = (route: SavedRoute | null) => invoke<void>("save_route", { route });
 
 export const datasetInfo = () => invoke<DataStatus>("dataset_info");
 /** Everything known about a system, from the journals and online sources. `refresh` skips the cache. */

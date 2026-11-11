@@ -48,6 +48,8 @@ pub struct ViewSettings {
     pub glow: bool,
     pub stars: bool,
     pub route: bool,
+    /// Draw the plotted route (the travel history is `route`).
+    pub plot: bool,
     /// What colours the populated-systems overlay ("population", "power", ...); "none" hides it.
     pub overlay: String,
     /// Per overlay, the categories picked out in colour (a minor faction's name for "faction").
@@ -66,6 +68,7 @@ impl Default for ViewSettings {
             glow: true,
             stars: true,
             route: true,
+            plot: true,
             overlay: "none".into(),
             highlights: BTreeMap::new(),
             poi: true,

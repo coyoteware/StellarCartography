@@ -17,9 +17,10 @@ function ringTexture(): THREE.Texture {
   return new THREE.CanvasTexture(canvas);
 }
 
-const RING = ringTexture();
+export const RING = ringTexture();
 
-function overlayPoints(colour: number, sizePx: number): THREE.Points {
+/** Unlit ring sprites drawn over everything, shared by the overlay layers. */
+export function overlayPoints(colour: number, sizePx: number): THREE.Points {
   const material = new THREE.PointsMaterial({
     color: colour,
     size: sizePx,
@@ -35,7 +36,7 @@ function overlayPoints(colour: number, sizePx: number): THREE.Points {
   return points;
 }
 
-function setPositions(geometry: THREE.BufferGeometry, items: { pos: Vec3 }[]): void {
+export function setPositions(geometry: THREE.BufferGeometry, items: { pos: Vec3 }[]): void {
   const arr = new Float32Array(items.length * 3);
   const v = new THREE.Vector3();
   items.forEach((j, i) => edToWorld(j.pos, v).toArray(arr, i * 3));

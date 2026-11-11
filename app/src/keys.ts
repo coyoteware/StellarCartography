@@ -46,9 +46,11 @@ export const ACTIONS = [
   { id: "toggleStars", group: "Layers", label: "Known systems on/off", keys: ["Shift+Digit2", ""] },
   { id: "toggleRoute", group: "Layers", label: "Travel history on/off", keys: ["Shift+Digit3", ""] },
   { id: "togglePoi", group: "Layers", label: "Points of interest on/off", keys: ["Shift+Digit4", ""] },
+  { id: "togglePlot", group: "Layers", label: "Plotted route on/off", keys: ["Shift+Digit5", ""] },
 
   { id: "search", group: "Panels", label: "Search", keys: ["Slash", "Ctrl+KeyF"] },
   { id: "places", group: "Panels", label: "Places open/closed", keys: ["KeyP", ""] },
+  { id: "route", group: "Panels", label: "Route planner open/closed", keys: ["KeyO", ""] },
   { id: "settings", group: "Panels", label: "Settings", anywhere: true, keys: ["Ctrl+Comma", ""] },
   { id: "keys", group: "Panels", label: "This list of keys", anywhere: true, keys: ["F1", "Shift+Slash"] },
 ] as const satisfies readonly ActionDef[];

@@ -40,10 +40,13 @@ pub enum Event {
     Docked { timestamp: String, id64: u64, market_id: u64 },
     /// Approaching a planetary port or settlement.
     ApproachSettlement { timestamp: String, id64: u64, market_id: u64 },
+    /// The current ship's modules; the line is kept whole and parsed on
+    /// demand (see [`crate::ship`]).
+    Loadout { timestamp: String },
 }
 
 /// The latest journal line describing a system or station.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct Snapshot {
     pub timestamp: String,
     pub line: String,
@@ -164,7 +167,7 @@ struct RawEvent {
     docked: Option<bool>,
 }
 
-const INTERESTING: [&str; 7] = [
+const INTERESTING: [&str; 8] = [
     "\"FSDJump\"",
     "\"CarrierJump\"",
     "\"Location\"",
@@ -172,6 +175,7 @@ const INTERESTING: [&str; 7] = [
     "\"LoadGame\"",
     "\"Docked\"",
     "\"ApproachSettlement\"",
+    "\"Loadout\"",
 ];
 
 /// Parses one journal line. Returns `None` for events we don't use or for
@@ -206,6 +210,7 @@ pub fn parse_line(line: &str) -> Option<Event> {
         }),
         "Commander" => Some(Event::Commander { fid: raw.fid?, name: raw.name? }),
         "LoadGame" => Some(Event::Commander { fid: raw.fid?, name: raw.commander? }),
+        "Loadout" => Some(Event::Loadout { timestamp: raw.timestamp.unwrap_or_default() }),
         _ => None,
     }
 }
@@ -256,6 +261,8 @@ fn sort_key(name: &str) -> String {
 pub struct Reader {
     pub history: History,
     pub snapshots: Snapshots,
+    /// The newest `Loadout` line per commander FID, for the route plotter.
+    pub loadouts: HashMap<String, Snapshot>,
     current_fid: Option<String>,
     current_file: Option<PathBuf>,
     offset: u64,
@@ -344,6 +351,13 @@ impl Reader {
                 Some(Event::ApproachSettlement { timestamp, id64, market_id }) => {
                     self.snapshots.record_station(StationEvent::Approach, market_id, id64, &timestamp, line);
                 }
+                Some(Event::Loadout { timestamp }) => {
+                    let fid = self.current_fid.clone().unwrap_or_else(|| "unknown".into());
+                    let slot = self.loadouts.entry(fid).or_default();
+                    if slot.timestamp.as_str() <= timestamp.as_str() {
+                        *slot = Snapshot { timestamp, line: line.into() };
+                    }
+                }
                 None => {}
             }
         }
@@ -378,6 +392,16 @@ impl JournalSource {
     pub fn snapshots(&mut self) -> Result<&Snapshots> {
         self.history()?;
         Ok(&self.reader.as_ref().unwrap().snapshots)
+    }
+
+    /// The newest `Loadout` line for `fid`, or for any commander when `None`.
+    pub fn loadout(&mut self, fid: Option<&str>) -> Result<Option<&Snapshot>> {
+        self.history()?;
+        let loadouts = &self.reader.as_ref().unwrap().loadouts;
+        Ok(match fid {
+            Some(fid) => loadouts.get(fid),
+            None => loadouts.values().max_by(|a, b| a.timestamp.cmp(&b.timestamp)),
+        })
     }
 }
 
