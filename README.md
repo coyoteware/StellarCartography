@@ -82,7 +82,7 @@ every row.
 | Move up, down (galactic north) | R, F, or Page Up, Page Down |
 | Orbit left, right, up, down | Q, E, T, G |
 | Zoom in, out | Z, X, or =, - |
-| Jump to Sol, the whole galaxy, your commander, home, the squadron capital | 1 to 5 (C and Home also work for commander and home) |
+| Jump to Sol, the whole galaxy, your commander, your home system, your squadron capital | 1 to 5 (C and Home also work for commander and home) |
 | Galaxy glow, known systems, travel history, points of interest on/off | Shift+1 to Shift+4 |
 | Search | / or Ctrl+F |
 | Places open/closed | P |
@@ -174,6 +174,12 @@ Whichever source saw a section last wins. Online answers are cached for an hour
 in `%LOCALAPPDATA%\io.github.stellarcartography.viewer\details-cache.sqlite`.
 Settings → System details switches the online source, or turns lookups off
 (journal only).
+
+"Mark as" Home or Squadron, under the system's coordinates, puts the system
+behind the Home or Squadron button under the search box (and keys 4 and 5).
+Each button shows once it has a system; press the lit toggle again, or Clear in
+Settings → Jump buttons, to take it away. The choice is saved in settings.json
+under `homeSystem` and `squadronSystem`.
 
 ## Build the galaxy data from the command line
 

@@ -12,6 +12,12 @@
   clipboard after each jump for the in-game galaxy map. The route survives a
   restart.
 
+### Changed
+- **Home and Squadron go where you choose.** They no longer point at fixed
+  systems: "Mark as" Home or Squadron in any system's details sets them, and
+  Settings → Jump buttons shows and clears them. A button stays hidden until it
+  has a system.
+
 ## 0.2.0 (2026-11-10)
 
 ### New

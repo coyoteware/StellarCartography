@@ -15,6 +15,7 @@ import {
   saveViewSettings,
   searchSystems,
   visitedSystems,
+  type Bookmark,
   type CommanderPayload,
   type DataStatus,
   type Jump,
@@ -31,6 +32,7 @@ import { PointCloud } from "./renderer/pointcloud";
 import type { PoiLayer } from "./renderer/poi";
 import { PlotLayer } from "./renderer/route";
 import { View } from "./renderer/view";
+import { BOOKMARKS, BOOKMARK_NAMES, Bookmarks } from "./ui/bookmarks";
 import { CatalogueUi } from "./ui/catalogue";
 import { Hud } from "./ui/hud";
 import { SystemPanel } from "./ui/details";
@@ -52,6 +54,7 @@ const view = new View($("viewport"));
 const hud = new Hud($("hud"));
 const toasts = new Toasts($("toasts"));
 const catalogue = new CatalogueUi(toasts);
+const bookmarks = new Bookmarks(toasts);
 const commander = new CommanderLayer();
 const selection = new SelectionMarker();
 const plot = new PlotLayer();
@@ -93,6 +96,7 @@ const systemPanel = new SystemPanel($("info-panel"), {
   commanderPos: () => commander.current()?.pos,
   visited: (id64) => visitedById.get(id64),
   places: (id64, name) => places.inSystem(id64, name),
+  bookmarks,
   onClose: () => {
     selectionSeq++;
     selection.set(null);
@@ -139,6 +143,7 @@ const places = new PlacesUi({
 
 const settingsPanel = new SettingsPanel({
   toasts,
+  bookmarks,
   view: () => viewSettings,
   onView: (v) => applyView(v),
   onRebuild: () => catalogue.rebuild(),
@@ -154,6 +159,11 @@ const settingsPanel = new SettingsPanel({
 });
 overlay.onStatus = () => settingsPanel.renderPopulated();
 places.onStatus = () => settingsPanel.renderPoi();
+bookmarks.onChange = () => {
+  renderBookmarkButtons();
+  systemPanel.syncBookmarks();
+  settingsPanel.renderBookmarks();
+};
 
 const routeUi = new RouteUi({
   toasts,
@@ -188,13 +198,6 @@ const openSettings = { label: "Settings", run: () => void settingsPanel.open() }
 
 const showGalaxy = () => view.lookAt(edToWorld(SGR_A), 95_000, new THREE.Vector3(0, 0.8, 0.6));
 const showSol = () => view.flyTo(edToWorld(SOL), 120);
-
-/**
- * Systems with their own jump-to button, as the catalogue has them. No rowid:
- * rebuilds renumber the rows, and the details only need the id64.
- */
-const HOME: SystemInfo = { rowid: null, id64: "2558223422178", name: "Synuefe GN-I c26-9", pos: [278.5625, -59.3125, 71.46875] };
-const SQUADRON_CAPITAL: SystemInfo = { rowid: null, id64: "869521148275", name: "HIP 49987", pos: [252.59375, -46.09375, 87.6875] };
 
 // --- View settings -----------------------------------------------------------
 
@@ -422,8 +425,27 @@ const goCommander = () => {
 };
 // These sit among thousands of neighbours, so they're selected (marker and
 // details) as well as flown to.
-const goHome = () => select(HOME, true);
-const goSquadron = () => select(SQUADRON_CAPITAL, true);
+const goBookmark = (slot: Bookmark) => {
+  const system = bookmarks.system(slot);
+  if (system) return select(system, true);
+  // The button only shows once there is one; the key is always there.
+  toasts.show(`There's no ${BOOKMARK_NAMES[slot].long} yet. Pick a system, then mark it in its details.`, "info", {
+    timeout: 6,
+  });
+};
+const goHome = () => goBookmark("home");
+const goSquadron = () => goBookmark("squadron");
+
+/** Shows the jump buttons that have a system behind them, named in their tooltips. */
+function renderBookmarkButtons(): void {
+  for (const slot of BOOKMARKS) {
+    const system = bookmarks.get(slot);
+    const button = $(`go-${slot}`);
+    button.hidden = !system;
+    button.title = system ? `${system.name}, your ${BOOKMARK_NAMES[slot].long}` : "";
+  }
+  $("bookmark-buttons").hidden = BOOKMARKS.every((slot) => !bookmarks.get(slot));
+}
 $("go-sol").addEventListener("click", showSol);
 $("go-galaxy").addEventListener("click", goGalaxy);
 $("go-cmdr").addEventListener("click", goCommander);
@@ -694,6 +716,7 @@ async function boot(): Promise<void> {
     updateReminders = settings.updateReminders;
     keyboard.use(new Bindings(settings.keys ?? {}));
     updateHelp();
+    bookmarks.load(settings);
   } catch (e) {
     toasts.error(`Couldn't read the settings: ${errorText(e)}`);
   }

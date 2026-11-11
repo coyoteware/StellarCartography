@@ -1,6 +1,7 @@
 // Settings panel: catalogue folder and rebuilds, journal folder, the
-// populated systems behind the overlay layers, the points of interest,
-// display preferences (point budget, brightness), and the way to the keys.
+// systems behind the jump buttons, the populated systems behind the overlay
+// layers, the points of interest, display preferences (point budget,
+// brightness), and the way to the keys.
 
 import {
   datasetInfo,
@@ -16,6 +17,7 @@ import {
   type Settings,
   type ViewSettings,
 } from "../api";
+import { BOOKMARKS, type Bookmarks } from "./bookmarks";
 import { DOWNLOAD_SIZES } from "./download";
 import { errorText, type Toasts } from "./toast";
 
@@ -30,6 +32,8 @@ const ORIGIN_NOTES: Record<DirOrigin, string> = {
 
 export interface SettingsDeps {
   toasts: Toasts;
+  /** The systems behind the Home and Squadron jump buttons. */
+  bookmarks: Bookmarks;
   view: () => ViewSettings;
   onView: (view: ViewSettings) => void;
   onRebuild: () => Promise<void>;
@@ -111,6 +115,10 @@ export class SettingsPanel {
     $("set-journal-change").addEventListener("click", () => void this.changeJournalDir());
     $("set-journal-reset").addEventListener("click", () => void this.applyJournalDir(null));
 
+    for (const slot of BOOKMARKS) {
+      $(`set-bookmark-${slot}-clear`).addEventListener("click", () => void this.deps.bookmarks.set(slot, null));
+    }
+
     const budget = $<HTMLSelectElement>("set-budget");
     budget.addEventListener("change", () => this.deps.onView({ ...this.deps.view(), pointBudget: Number(budget.value) }));
     const exposure = $<HTMLInputElement>("set-exposure");
@@ -146,6 +154,18 @@ export class SettingsPanel {
     $("set-rebuild-confirm").hidden = true;
     $("set-populated-confirm").hidden = true;
     $("set-poi-confirm").hidden = true;
+  }
+
+  /** Refreshes the jump-button systems (marked or cleared elsewhere meanwhile). */
+  renderBookmarks(): void {
+    if (this.el.hidden) return;
+    for (const slot of BOOKMARKS) {
+      const system = this.deps.bookmarks.get(slot);
+      const name = $(`set-bookmark-${slot}`);
+      name.textContent = system?.name ?? "Not set";
+      name.classList.toggle("muted", !system);
+      $(`set-bookmark-${slot}-clear`).hidden = !system;
+    }
   }
 
   /** Refreshes the populated-systems line (it changes during a download). */
@@ -192,6 +212,7 @@ export class SettingsPanel {
 
     $<HTMLSelectElement>("set-details-source").value = s.detailsSource;
     $<HTMLInputElement>("set-update-reminders").checked = s.updateReminders;
+    this.renderBookmarks();
     this.renderPopulated();
     this.renderPoi();
 

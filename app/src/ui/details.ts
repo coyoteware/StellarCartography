@@ -2,7 +2,8 @@
 // fills in population, Powerplay, factions, stations and bodies from the
 // journals and online sources, each section labelled with where it came from
 // and how old it is. Points of interest in the system are listed straight
-// away, from the downloaded catalogue.
+// away, from the downloaded catalogue. The system can be marked as the home
+// system or squadron capital, for those jump buttons.
 
 import {
   massCode,
@@ -20,6 +21,7 @@ import {
 } from "../api";
 import { categoryInfo, glyph, type Poi } from "../poi";
 import { SOL, distance } from "../renderer/coords";
+import { BOOKMARKS, BOOKMARK_NAMES, type Bookmarks } from "./bookmarks";
 import { h, type Child } from "./dom";
 import { errorText } from "./toast";
 
@@ -94,6 +96,8 @@ export interface PanelDeps {
   visited: (id64: string) => VisitedSystem | undefined;
   /** Points of interest in the system. */
   places: (id64: string | null, name: string) => Poi[];
+  /** The systems behind the Home and Squadron jump buttons. */
+  bookmarks: Bookmarks;
   onClose: () => void;
   onError: (message: string) => void;
 }
@@ -104,6 +108,8 @@ export class SystemPanel {
   /** A load is in flight; a quiet reload asked for meanwhile waits for it. */
   private loading = false;
   private reloadAfter = false;
+  /** The "Mark as" toggles of the system on show. */
+  private readonly marks = h("div", "segs bookmark-toggles");
 
   constructor(
     private readonly root: HTMLElement,
@@ -135,6 +141,24 @@ export class SystemPanel {
     // for); reload from what it leaves in the cache once it lands.
     if (this.loading) this.reloadAfter = true;
     else void this.load(false, true);
+  }
+
+  /** Redraws the "Mark as" toggles (the jump buttons changed). */
+  syncBookmarks(): void {
+    const system = this.system;
+    if (!system) return;
+    this.marks.replaceChildren(
+      ...BOOKMARKS.map((slot) => {
+        const { button, long } = BOOKMARK_NAMES[slot];
+        const on = this.deps.bookmarks.is(slot, system);
+        const b = h("button", undefined, button);
+        b.type = "button";
+        b.setAttribute("aria-pressed", String(on));
+        b.title = on ? `Your ${long}. Click to clear it.` : `Make this your ${long}`;
+        b.addEventListener("click", () => void this.deps.bookmarks.set(slot, on ? null : system));
+        return b;
+      }),
+    );
   }
 
   close(): void {
@@ -193,6 +217,7 @@ export class SystemPanel {
       h("div", "head-buttons", refresh, close),
     );
 
+    this.syncBookmarks();
     const parts: Child[] = [head, this.places(system), this.overview(system, d)];
     if (state.error) {
       const retry = h("button", undefined, "Try again");
@@ -271,6 +296,7 @@ export class SystemPanel {
         ["From you", you ? `${num(distance(system.pos, you), 2)} ly` : null],
         ["id64", system.id64 ? `${system.id64} (mass code ${massCode(system.id64)})` : null],
       ]),
+      h("div", "bookmark-row", h("span", "label", "Mark as"), this.marks),
     );
   }
 

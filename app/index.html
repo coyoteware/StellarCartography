@@ -26,10 +26,11 @@
           </div>
           <button id="open-settings" type="button" class="quiet push" title="Settings">Settings</button>
         </div>
-        <div class="buttons">
-          <div class="segs" role="group" aria-label="Jump to our systems">
-            <button id="go-home" type="button" title="Synuefe GN-I c26-9, our home system">Home</button>
-            <button id="go-squadron" type="button" title="HIP 49987, the squadron capital">Squadron</button>
+        <!-- Systems the user marked in their details (ui/bookmarks.ts); hidden until one is. -->
+        <div class="buttons" id="bookmark-buttons" hidden>
+          <div class="segs" role="group" aria-label="Jump to your systems">
+            <button id="go-home" type="button" hidden>Home</button>
+            <button id="go-squadron" type="button" hidden>Squadron</button>
           </div>
         </div>
       </div>
@@ -165,6 +166,23 @@
           <button id="set-journal-change" type="button">Change…</button>
           <button id="set-journal-reset" type="button" hidden>Use default</button>
         </div>
+      </section>
+      <section>
+        <h2>Jump buttons</h2>
+        <div class="bookmark-line">
+          Home
+          <span id="set-bookmark-home"></span>
+          <button id="set-bookmark-home-clear" type="button">Clear</button>
+        </div>
+        <div class="bookmark-line">
+          Squadron capital
+          <span id="set-bookmark-squadron"></span>
+          <button id="set-bookmark-squadron-clear" type="button">Clear</button>
+        </div>
+        <p class="muted small">
+          Home and Squadron under the search box fly to systems of your choosing. Click a star or search for a system,
+          then press Home or Squadron next to "Mark as" in its details. Each button shows once it has a system.
+        </p>
       </section>
       <section>
         <h2>System details</h2>
