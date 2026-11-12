@@ -136,7 +136,7 @@ fn fsd_overcharge_stats(size: u32, class: u32) -> Option<FsdStats> {
 }
 
 fn fuel_power(size: u32) -> Option<f64> {
-    (2..=8).contains(&size).then(|| 2.0 + 0.15 * (size as f64 - 2.0))
+    (2..=8).contains(&size).then_some(2.0 + 0.15 * (size as f64 - 2.0))
 }
 
 /// Guardian FSD booster range by module size.
