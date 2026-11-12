@@ -60,6 +60,20 @@ export interface Settings {
   view: ViewSettings;
   /** Keyboard shortcuts the user changed: action id → its two keys (see keys.ts). */
   keys: Record<string, string[]>;
+  /** The system behind the Home jump button; null hides the button. */
+  homeSystem: SavedSystem | null;
+  /** The system behind the Squadron jump button; null hides the button. */
+  squadronSystem: SavedSystem | null;
+}
+
+/** The jump buttons whose system the user picks. */
+export type Bookmark = "home" | "squadron";
+
+/** A system kept for a jump button: no rowid, since rebuilds renumber the rows. */
+export interface SavedSystem {
+  id64: string | null;
+  name: string;
+  pos: Vec3;
 }
 
 /** Free space for a catalogue build in a folder (bytes). */
@@ -421,6 +435,8 @@ export const getSettings = () => invoke<Settings>("get_settings");
 export const saveViewSettings = (view: ViewSettings) => invoke<void>("save_view_settings", { view });
 /** Saves the keyboard shortcuts that differ from the defaults. */
 export const saveKeys = (keys: Record<string, string[]>) => invoke<void>("save_keys", { keys });
+/** Puts a system behind a jump button; `null` clears it. */
+export const setBookmark = (slot: Bookmark, system: SavedSystem | null) => invoke<void>("set_bookmark", { slot, system });
 /** Switches to an existing build in `dir` (or its `data` subfolder). */
 export const useDataDir = (dir: string) => invoke<DataStatus>("use_data_dir", { dir });
 /** `null` goes back to the game's default journal folder. */

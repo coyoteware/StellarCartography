@@ -24,7 +24,7 @@ use galaxy_core::journal::{Carrier, CommanderSource, CommanderTrack, Jump, Journ
 use galaxy_core::visited::{self, VisitedEntry};
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
-use settings::{Settings, ViewSettings};
+use settings::{Bookmark, SavedSystem, Settings, ViewSettings};
 use tauri::http::{header, Response, StatusCode};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -144,6 +144,8 @@ struct SettingsView {
     friends: Vec<String>,
     view: ViewSettings,
     keys: BTreeMap<String, Vec<String>>,
+    home_system: Option<SavedSystem>,
+    squadron_system: Option<SavedSystem>,
 }
 
 #[derive(Serialize, Clone)]
@@ -411,6 +413,8 @@ fn get_settings(state: State<AppState>) -> CmdResult<SettingsView> {
         friends: settings.friends.clone(),
         view: settings.view.clone(),
         keys: settings.keys.clone(),
+        home_system: settings.home_system.clone(),
+        squadron_system: settings.squadron_system.clone(),
     })
 }
 
@@ -430,6 +434,21 @@ fn save_keys(state: State<AppState>, keys: BTreeMap<String, Vec<String>>) -> Cmd
     let mut settings = state.settings.lock().map_err(err)?;
     if settings.keys != keys {
         settings.keys = keys;
+        save_settings(&state, &settings)?;
+    }
+    Ok(())
+}
+
+/// Puts `system` behind a jump button; `None` clears it (and hides the button).
+#[tauri::command]
+fn set_bookmark(state: State<AppState>, slot: Bookmark, system: Option<SavedSystem>) -> CmdResult<()> {
+    if let Some(problem) = system.as_ref().and_then(SavedSystem::problem) {
+        return Err(problem.into());
+    }
+    let mut settings = state.settings.lock().map_err(err)?;
+    let saved = settings.bookmark_mut(slot);
+    if *saved != system {
+        *saved = system;
         save_settings(&state, &settings)?;
     }
     Ok(())
@@ -1101,6 +1120,7 @@ pub fn run() {
             get_settings,
             save_view_settings,
             save_keys,
+            set_bookmark,
             use_data_dir,
             set_journal_dir,
             pick_folder,

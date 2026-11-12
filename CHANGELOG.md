@@ -25,6 +25,9 @@
   Squadron carriers are left out. It goes with Layers → Travel history.
 
 ### Changed
+- **Home and Squadron go where you choose.** They no longer point at fixed
+  systems: Settings → Jump buttons sets and clears them. A button stays hidden
+  until it has a system.
 - **Map markers.** You, your friends, your home system and your carrier are
   LCARS block pins: a solid block in the system's colour (accent, ice, lilac,
   peach) with a pictogram cut out of it, standing beside its star and pointing
