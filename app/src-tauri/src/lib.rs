@@ -10,7 +10,7 @@ mod details;
 mod routes;
 mod settings;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -20,7 +20,7 @@ use data::{DataStatus, Dataset, DirOrigin};
 use details::{Online, OnlineSource};
 use galaxy_core::details::SystemDetails;
 use galaxy_core::id64::Id64;
-use galaxy_core::journal::{CommanderSource, CommanderTrack, Jump, JournalSource};
+use galaxy_core::journal::{Carrier, CommanderSource, CommanderTrack, Jump, JournalSource};
 use galaxy_core::visited::{self, VisitedEntry};
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
@@ -121,6 +121,14 @@ struct CommanderPayload {
 struct JumpEvent {
     fid: String,
     jump: Jump,
+}
+
+/// A commander's own fleet carrier changed (or went: `None`).
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct CarrierEvent {
+    fid: String,
+    carrier: Option<Carrier>,
 }
 
 #[derive(Serialize)]
@@ -270,8 +278,8 @@ fn get_system(state: State<AppState>, rowid: u32) -> CmdResult<Option<SystemInfo
 #[tauri::command]
 fn commander_history(state: State<AppState>) -> CmdResult<CommanderPayload> {
     let configured = journal_dir(&*state.settings.lock().map_err(err)?);
-    let mut source = state.commander.lock().map_err(err)?;
-    let Some(source) = source.as_mut() else {
+    let mut guard = state.commander.lock().map_err(err)?;
+    let Some(source) = guard.as_mut() else {
         return Ok(CommanderPayload {
             journal_dir: configured.as_deref().map(display),
             found: false,
@@ -281,12 +289,36 @@ fn commander_history(state: State<AppState>) -> CmdResult<CommanderPayload> {
     };
     let dir = display(source.dir());
     let history = source.history().map_err(err)?;
-    Ok(CommanderPayload {
-        journal_dir: Some(dir),
-        found: true,
-        latest_fid: history.latest().map(|c| c.fid.clone()),
-        commanders: history.commanders.values().cloned().collect(),
-    })
+    let latest_fid = history.latest().map(|c| c.fid.clone());
+    let mut commanders: Vec<CommanderTrack> = history.commanders.values().cloned().collect();
+    // Not while holding the journal: placing takes the catalogue's lock.
+    drop(guard);
+    for carrier in commanders.iter_mut().filter_map(|c| c.carrier.as_mut()) {
+        place_carrier(&state, carrier);
+    }
+    Ok(CommanderPayload { journal_dir: Some(dir), found: true, latest_fid, commanders })
+}
+
+/// Gives the carrier's places coordinates where the journal had none: from
+/// the catalogue, or the boxel centre for a system it doesn't hold.
+fn place_carrier(state: &AppState, carrier: &mut Carrier) {
+    let slot = state.data.read().ok();
+    let db = slot.as_ref().and_then(|s| s.dataset.as_ref()).and_then(|d| d.db.lock().ok());
+    let places = carrier.at.iter_mut().chain(carrier.jump.as_mut().map(|j| &mut j.to));
+    for place in places {
+        let Some(id64) = place.id64.filter(|_| place.pos.is_none()) else { continue };
+        let found = db.as_ref().and_then(|db| {
+            let mut stmt = db.prepare_cached("SELECT x32, y32, z32 FROM systems WHERE id64 = ?1").ok()?;
+            stmt.query_row([id64 as i64], |r| {
+                let c = |i| -> rusqlite::Result<f32> { Ok(r.get::<_, i64>(i)? as f32 / 32.0) };
+                Ok([c(0)?, c(1)?, c(2)?])
+            })
+            .optional()
+            .ok()
+            .flatten()
+        });
+        place.pos = Some(found.unwrap_or_else(|| Id64::decode(id64).boxel_centre()));
+    }
 }
 
 #[derive(Serialize)]
@@ -938,27 +970,49 @@ fn serve(data_dir: Option<&Path>, path: &str) -> Response<Vec<u8>> {
     }
 }
 
-/// Polls the journal once a second and forwards new jumps to the web view.
-/// Polling rather than file-change notifications: the game keeps the journal
-/// open and Windows doesn't reliably report its writes.
+/// Polls the journal once a second and forwards new jumps, and changes to
+/// commanders' own carriers, to the web view. Polling rather than
+/// file-change notifications: the game keeps the journal open and Windows
+/// doesn't reliably report its writes.
 fn spawn_journal_watcher(app: AppHandle) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(1));
-        let state = app.state::<AppState>();
-        let new = match state.commander.lock() {
-            Ok(mut source) => match source.as_mut() {
-                Some(s) => s.poll(),
-                None => continue,
-            },
-            Err(_) => return,
-        };
-        match new {
-            Ok(jumps) => {
-                for (fid, jump) in jumps {
-                    let _ = app.emit("commander-jump", JumpEvent { fid, jump });
+    std::thread::spawn(move || {
+        let mut sent: HashMap<String, Option<Carrier>> = HashMap::new();
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let state = app.state::<AppState>();
+            let (new, carriers) = match state.commander.lock() {
+                Ok(mut source) => match source.as_mut() {
+                    Some(s) => {
+                        let new = s.poll();
+                        let carriers: Vec<(String, Option<Carrier>)> = s
+                            .history()
+                            .map(|h| h.commanders.iter().map(|(fid, c)| (fid.clone(), c.carrier.clone())).collect())
+                            .unwrap_or_default();
+                        (new, carriers)
+                    }
+                    None => continue,
+                },
+                Err(_) => return,
+            };
+            match new {
+                Ok(jumps) => {
+                    for (fid, jump) in jumps {
+                        let _ = app.emit("commander-jump", JumpEvent { fid, jump });
+                    }
                 }
+                Err(e) => eprintln!("journal poll failed: {e}"),
             }
-            Err(e) => eprintln!("journal poll failed: {e}"),
+            for (fid, carrier) in carriers {
+                if sent.get(&fid) == Some(&carrier) {
+                    continue;
+                }
+                sent.insert(fid.clone(), carrier.clone());
+                let mut carrier = carrier;
+                if let Some(c) = carrier.as_mut() {
+                    place_carrier(&state, c);
+                }
+                let _ = app.emit("commander-carrier", CarrierEvent { fid, carrier });
+            }
         }
     });
 }

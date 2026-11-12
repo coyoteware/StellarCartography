@@ -111,6 +111,27 @@ export interface CommanderTrack {
   fid: string;
   name: string;
   jumps: Jump[];
+  /** Their own fleet carrier, when the journals mention one. */
+  carrier?: Carrier | null;
+}
+
+/** Somewhere a carrier was (or will be); `pos` is the catalogue's, or the boxel centre. */
+export interface CarrierPlace {
+  timestamp: string;
+  system: string;
+  id64: string | null;
+  pos: Vec3 | null;
+}
+
+export interface Carrier {
+  /** CarrierID, which is also its MarketID. */
+  id: number;
+  name: string | null;
+  callsign: string | null;
+  /** Where it was last seen. */
+  at: CarrierPlace | null;
+  /** A jump booked since: from `departure` (ISO, UTC) on it's at `to`. */
+  jump: { timestamp: string; departure: string; to: CarrierPlace } | null;
 }
 
 export interface CommanderPayload {
@@ -440,6 +461,10 @@ export function onPoiProgress(handler: (p: PoiProgress) => void): Promise<Unlist
 
 export function onPoiDone(handler: (d: PoiDone) => void): Promise<UnlistenFn> {
   return listen<PoiDone>("poi-done", (e) => handler(e.payload));
+}
+
+export function onCommanderCarrier(handler: (fid: string, carrier: Carrier | null) => void): Promise<UnlistenFn> {
+  return listen<{ fid: string; carrier: Carrier | null }>("commander-carrier", (e) => handler(e.payload.fid, e.payload.carrier));
 }
 
 export function onCommanderJump(handler: (fid: string, jump: Jump) => void): Promise<UnlistenFn> {

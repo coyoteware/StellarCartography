@@ -10,11 +10,14 @@ import {
   datasetInfo,
   getSettings,
   getSystem,
+  onCommanderCarrier,
   onCommanderJump,
   saveKeys,
   saveViewSettings,
   searchSystems,
   visitedSystems,
+  type Carrier,
+  type CarrierPlace,
   type CommanderPayload,
   type DataStatus,
   type Jump,
@@ -28,7 +31,7 @@ import type { Poi } from "./poi";
 import { CommanderLayer, SelectionMarker } from "./renderer/commander";
 import { SGR_A, SOL, edToWorld, worldToEd } from "./renderer/coords";
 import { GalaxyGlow } from "./renderer/glow";
-import { PinSet } from "./renderer/pins";
+import { PinSet, type PinItem } from "./renderer/pins";
 import { PointCloud } from "./renderer/pointcloud";
 import type { PoiLayer } from "./renderer/poi";
 import { PlotLayer } from "./renderer/route";
@@ -58,7 +61,8 @@ const commander = new CommanderLayer();
 const selection = new SelectionMarker();
 const plot = new PlotLayer();
 const homePin = new PinSet("home", $("poi-labels"));
-view.overlay.add(commander.object, selection.object, plot.object, homePin.object);
+const carrierPin = new PinSet<PinItem & { carrier: Carrier; place: CarrierPlace }>("carrier", $("poi-labels"));
+view.overlay.add(commander.object, selection.object, plot.object, homePin.object, carrierPin.object);
 
 let cloud: PointCloud | null = null;
 let glow: GalaxyGlow | null = null;
@@ -220,7 +224,9 @@ function applyView(next: ViewSettings, persist = true): void {
     cloud.object.visible = next.stars;
   }
   if (glow) glow.mesh.visible = next.glow;
+  // Your carrier is journal data like your route, so it goes with it.
   commander.object.visible = next.route;
+  carrierPin.visible = next.route;
   plot.object.visible = next.plot;
   $<HTMLInputElement>("layer-glow").checked = next.glow;
   $<HTMLInputElement>("layer-stars").checked = next.stars;
@@ -312,6 +318,7 @@ function setCommander(fid: string): void {
   selectedFid = fid;
   commander.setTrack(track);
   updateLocation();
+  showCarrier();
   view.wake();
 }
 
@@ -407,6 +414,44 @@ async function loadCommander(): Promise<void> {
       view.wake();
     }
   });
+  await onCommanderCarrier((fid, carrier) => {
+    const track = commanders?.commanders.find((c) => c.fid === fid);
+    if (!track) return;
+    track.carrier = carrier;
+    if (fid === selectedFid) showCarrier();
+  });
+}
+
+// --- Your carrier ----------------------------------------------------------------
+
+let carrierTimer = 0;
+
+/** Where a carrier is now: at a booked jump's destination once it has departed. */
+function carrierNow(c: Carrier): CarrierPlace | null {
+  if (c.jump && Date.parse(c.jump.departure) <= Date.now()) return c.jump.to;
+  return c.at;
+}
+
+/** Pins the selected commander's carrier, and moves it again when a booked jump departs. */
+function showCarrier(): void {
+  window.clearTimeout(carrierTimer);
+  const c = commanders?.commanders.find((t) => t.fid === selectedFid)?.carrier ?? null;
+  const place = c ? carrierNow(c) : null;
+  carrierPin.set(c && place?.pos ? [{ pos: place.pos, label: c.name ?? c.callsign ?? "Carrier", carrier: c, place }] : []);
+  const wait = c?.jump ? Date.parse(c.jump.departure) - Date.now() : NaN;
+  if (wait > 0) carrierTimer = window.setTimeout(showCarrier, Math.min(wait + 1000, 2 ** 31 - 1));
+  view.wake();
+}
+
+/** "GSV Name · ABC-123 · System · jumping to Elsewhere at 18:40" for the hover label. */
+function describeCarrier(c: Carrier, place: CarrierPlace): string {
+  const parts = [c.name, c.callsign, place.system].filter((s): s is string => !!s);
+  const jump = c.jump;
+  if (jump && Date.parse(jump.departure) > Date.now()) {
+    const at = new Date(jump.departure).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    parts.push(`jumping to ${jump.to.system} at ${at}`);
+  }
+  return parts.join(" · ");
 }
 
 /** Selects a system by name (its catalogue entry when it has one), e.g. a pin's. */
@@ -535,13 +580,14 @@ function setPoiHover(i: number | null): void {
   view.wake();
 }
 
-type PinHit = { kind: "you" | "home"; index: number };
+type PinHit = { kind: "you" | "carrier" | "home"; index: number };
 
 /** The pin under (x, y): they draw over everything, so they pick first. */
 function pickPin(x: number, y: number, radius: number): PinHit | null {
   const [w, h] = [canvas.clientWidth, canvas.clientHeight];
   const sets = [
     ["you", commander.pin],
+    ["carrier", carrierPin],
     ["home", homePin],
   ] as const;
   for (const [kind, set] of sets) {
@@ -558,6 +604,10 @@ function describePin(hit: PinHit): string {
       const name = commanders?.commanders.find((c) => c.fid === selectedFid)?.name;
       return [name ? `CMDR ${name}` : "You", cur?.system].filter(Boolean).join(" · ");
     }
+    case "carrier": {
+      const item = carrierPin.items[hit.index];
+      return describeCarrier(item.carrier, item.place);
+    }
     case "home":
       return `Home · ${HOME.name}`;
   }
@@ -568,6 +618,11 @@ function selectPin(hit: PinHit): void {
     case "you": {
       const cur = commander.current();
       if (cur) void selectNamed(cur.system, cur.pos, cur.id64);
+      return;
+    }
+    case "carrier": {
+      const { place } = carrierPin.items[hit.index];
+      if (place.pos) void selectNamed(place.system, place.pos, place.id64);
       return;
     }
     case "home":
@@ -707,7 +762,7 @@ view.onFrame((now, dt) => {
   plot.update(now);
   overlay.layer?.update(view.pixelRatio);
   places.layer?.update(view.camera, canvas.clientWidth, canvas.clientHeight, view.pixelRatio, !view.idle);
-  for (const pins of [commander.pin, homePin]) {
+  for (const pins of [commander.pin, homePin, carrierPin]) {
     pins.update(view.camera, canvas.clientWidth, canvas.clientHeight, !view.idle);
   }
   const stats = cloud?.stats() ?? null;

@@ -11,14 +11,19 @@
   waypoint list follows your jumps, and the next system can be copied to the
   clipboard after each jump for the in-game galaxy map. The route survives a
   restart.
+- **Your fleet carrier on the map.** The journals' carrier events (bought,
+  stats, location at login, jumps booked and cancelled, riding it through a
+  jump) place your own carrier as a peach pin labelled with its name; it moves
+  when a booked jump departs, and hovering it says where it's jumping next.
+  Squadron carriers are left out. It goes with Layers → Travel history.
 
 ### Changed
-- **Map markers.** You and your home system are LCARS block pins: a solid
-  block in the system's colour (accent, lilac) with a pictogram cut out of it,
-  standing beside its star and pointing at it. Hover a pin for what it is,
-  click it to select the system. Megaships, the expeditions' carriers (DSSA,
-  OASIS, PIONEER) and carrier hubs are drawn as ships seen from above instead
-  of squares and dots.
+- **Map markers.** You, your home system and your carrier are LCARS block
+  pins: a solid block in the system's colour (accent, lilac, peach) with a
+  pictogram cut out of it, standing beside its star and pointing at it. Hover
+  a pin for what it is, click it to select the system. Megaships, the
+  expeditions' carriers (DSSA, OASIS, PIONEER) and carrier hubs are drawn as
+  ships seen from above instead of squares and dots.
 - **No more edge around the explored regions.** The galaxy glow stands for
   every system, while the stars show only the catalogued ones, which
   are nearly complete within about 1,000 ly of Sol and around 1% beyond
