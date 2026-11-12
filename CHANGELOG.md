@@ -13,6 +13,12 @@
   restart.
 
 ### Changed
+- **Map markers.** You and your home system are LCARS block pins: a solid
+  block in the system's colour (accent, lilac) with a pictogram cut out of it,
+  standing beside its star and pointing at it. Hover a pin for what it is,
+  click it to select the system. Megaships, the expeditions' carriers (DSSA,
+  OASIS, PIONEER) and carrier hubs are drawn as ships seen from above instead
+  of squares and dots.
 - **No more edge around the explored regions.** The galaxy glow stands for
   every system, while the stars show only the catalogued ones, which
   are nearly complete within about 1,000 ly of Sol and around 1% beyond

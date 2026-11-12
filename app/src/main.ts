@@ -19,6 +19,7 @@ import {
   type DataStatus,
   type Jump,
   type SystemInfo,
+  type Vec3,
   type ViewSettings,
   type VisitedSystem,
 } from "./api";
@@ -27,6 +28,7 @@ import type { Poi } from "./poi";
 import { CommanderLayer, SelectionMarker } from "./renderer/commander";
 import { SGR_A, SOL, edToWorld, worldToEd } from "./renderer/coords";
 import { GalaxyGlow } from "./renderer/glow";
+import { PinSet } from "./renderer/pins";
 import { PointCloud } from "./renderer/pointcloud";
 import type { PoiLayer } from "./renderer/poi";
 import { PlotLayer } from "./renderer/route";
@@ -55,7 +57,8 @@ const catalogue = new CatalogueUi(toasts);
 const commander = new CommanderLayer();
 const selection = new SelectionMarker();
 const plot = new PlotLayer();
-view.overlay.add(commander.object, selection.object, plot.object);
+const homePin = new PinSet("home", $("poi-labels"));
+view.overlay.add(commander.object, selection.object, plot.object, homePin.object);
 
 let cloud: PointCloud | null = null;
 let glow: GalaxyGlow | null = null;
@@ -195,6 +198,7 @@ const showSol = () => view.flyTo(edToWorld(SOL), 120);
  */
 const HOME: SystemInfo = { rowid: null, id64: "2558223422178", name: "Synuefe GN-I c26-9", pos: [278.5625, -59.3125, 71.46875] };
 const SQUADRON_CAPITAL: SystemInfo = { rowid: null, id64: "869521148275", name: "HIP 49987", pos: [252.59375, -46.09375, 87.6875] };
+homePin.set([{ pos: HOME.pos, label: HOME.name }]);
 
 // --- View settings -----------------------------------------------------------
 
@@ -405,6 +409,15 @@ async function loadCommander(): Promise<void> {
   });
 }
 
+/** Selects a system by name (its catalogue entry when it has one), e.g. a pin's. */
+async function selectNamed(name: string, pos: Vec3, id64: string | null = null): Promise<void> {
+  const mine = ++selectionSeq;
+  const found = await searchSystems(name).catch(() => []);
+  if (mine !== selectionSeq) return;
+  const match = found.find((s) => s.name.toLowerCase() === name.toLowerCase());
+  select(match ?? { rowid: null, id64, name, pos }, false);
+}
+
 // --- UI wiring ---------------------------------------------------------------
 
 setupSearch($("search"), $("search-results"), {
@@ -522,6 +535,46 @@ function setPoiHover(i: number | null): void {
   view.wake();
 }
 
+type PinHit = { kind: "you" | "home"; index: number };
+
+/** The pin under (x, y): they draw over everything, so they pick first. */
+function pickPin(x: number, y: number, radius: number): PinHit | null {
+  const [w, h] = [canvas.clientWidth, canvas.clientHeight];
+  const sets = [
+    ["you", commander.pin],
+    ["home", homePin],
+  ] as const;
+  for (const [kind, set] of sets) {
+    const index = set.pick(view.camera, w, h, x, y, radius);
+    if (index !== null) return { kind, index };
+  }
+  return null;
+}
+
+function describePin(hit: PinHit): string {
+  switch (hit.kind) {
+    case "you": {
+      const cur = commander.current();
+      const name = commanders?.commanders.find((c) => c.fid === selectedFid)?.name;
+      return [name ? `CMDR ${name}` : "You", cur?.system].filter(Boolean).join(" · ");
+    }
+    case "home":
+      return `Home · ${HOME.name}`;
+  }
+}
+
+function selectPin(hit: PinHit): void {
+  switch (hit.kind) {
+    case "you": {
+      const cur = commander.current();
+      if (cur) void selectNamed(cur.system, cur.pos, cur.id64);
+      return;
+    }
+    case "home":
+      return select(HOME, false);
+  }
+}
+
 /** The point-of-interest marker under (x, y), when they're drawn. */
 function pickPoi(x: number, y: number, radius: number): Poi | null {
   const layer = places.layer;
@@ -540,7 +593,19 @@ function hover(): void {
   hoverTimer = 0;
   if (!hoverAt) return;
   const { x, y } = hoverAt;
-  // Markers first, then coloured dots: they're what those layers are about.
+  // Pins draw on top of everything, so they pick first.
+  const pin = pickPin(x, y, 5);
+  if (pin !== null) {
+    hoverRowid = -1;
+    setPoiHover(null);
+    canvas.style.cursor = "pointer";
+    hoverLabel.style.left = `${x}px`;
+    hoverLabel.style.top = `${y}px`;
+    hoverLabel.textContent = describePin(pin);
+    hoverLabel.hidden = false;
+    return;
+  }
+  // Markers next, then coloured dots: they're what those layers are about.
   const poi = pickPoi(x, y, 5);
   if (poi && places.layer) {
     hoverRowid = -1;
@@ -602,6 +667,8 @@ canvas.addEventListener("pointerdown", (e) => {
 canvas.addEventListener("pointerup", async (e) => {
   if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return;
   const { x, y } = canvasPoint(e);
+  const pin = pickPin(x, y, 6);
+  if (pin !== null) return selectPin(pin);
   const poi = pickPoi(x, y, 6);
   if (poi) return void selectPoi(poi, false);
   const dot = pickOverlay(x, y, 6);
@@ -640,6 +707,9 @@ view.onFrame((now, dt) => {
   plot.update(now);
   overlay.layer?.update(view.pixelRatio);
   places.layer?.update(view.camera, canvas.clientWidth, canvas.clientHeight, view.pixelRatio, !view.idle);
+  for (const pins of [commander.pin, homePin]) {
+    pins.update(view.camera, canvas.clientWidth, canvas.clientHeight, !view.idle);
+  }
   const stats = cloud?.stats() ?? null;
   if (stats && stats.failed > reportedTileFailures) {
     if (reportedTileFailures === 0) {

@@ -10,7 +10,7 @@
 // off, so the whole galaxy doesn't vanish under them.
 
 import * as THREE from "three";
-import { CATEGORIES, SHAPES, categoryInfo, type Poi, type PoiCategory } from "../poi";
+import { CATEGORIES, SHAPES, isShip, poiShape, type Poi, type PoiCategory } from "../poi";
 import { edToWorld } from "./coords";
 import { pickPoint, projector } from "./pick";
 
@@ -26,10 +26,21 @@ const LABEL_RANGE = 2500;
 const MAX_LABELS = 40;
 const LABEL_FONT_PX = 11;
 
-const MARKER = new THREE.Color("#f2ead8");
-const ACCENT = new THREE.Color("#ff9a2e");
-/** The map background (view.ts), so outlines read as gaps. */
-const OUTLINE = new THREE.Vector3(3, 4, 10).divideScalar(255);
+/**
+ * A colour as the sRGB numbers the shader writes straight out. ShaderMaterial
+ * does no colour management, and THREE.Color would hand it linear values: the
+ * glyphs came out #e2d2af and the accent #ff5207.
+ */
+function srgb(hex: string): THREE.Vector3 {
+  const n = parseInt(hex.slice(1), 16);
+  return new THREE.Vector3(n >> 16, (n >> 8) & 255, n & 255).divideScalar(255);
+}
+
+/** Design-system colours: map-glyph, accent. */
+const MARKER = srgb("#f2ead8");
+const ACCENT = srgb("#ff9a2e");
+/** The map background (bg-void), so outlines read as gaps. */
+const OUTLINE = srgb("#03040a");
 
 /** Drawn first (underneath) to last (on top). */
 const DRAW_ORDER: PoiCategory[] = [...CATEGORIES.map((c) => c.id)].reverse();
@@ -88,7 +99,47 @@ const fragmentShader = /* glsl */ `
     return length(p) * sign(p.y);
   }
 
+  // The ship pictograms are drawn in the 16-unit box of their SVGs (poi.ts),
+  // y down, filling 16/18 of the sprite so the outline fits round them.
+
+  float sdRect(vec2 q, vec2 a, vec2 b) {
+    return sdBox(q - 0.5 * (a + b), 0.5 * (b - a));
+  }
+
+  // A hull: square stern at x0, sides at cy ± h, a bow from x1 out to a point at x2.
+  float sdHull(vec2 q, float x0, float x1, float x2, float cy, float h) {
+    vec2 p = vec2(q.x, abs(q.y - cy));
+    float body = max(x0 - p.x, p.y - h);
+    float bow = dot(p - vec2(x2, 0.0), normalize(vec2(h, x2 - x1)));
+    return max(body, bow);
+  }
+
+  float sdShip(vec2 q, int s) {
+    if (s == ${SHAPES.megaship}) {
+      float spine = sdHull(q, 0.6, 13.4, 15.6, 8.0, 1.8);
+      float block = sdRect(q, vec2(6.2, 4.2), vec2(9.4, 11.8)) - 0.6;
+      float slots = min(sdRect(q, vec2(3.1, 5.0), vec2(4.0, 11.0)), sdRect(q, vec2(11.6, 5.0), vec2(12.5, 11.0)));
+      return max(min(spine, block), -slots);
+    }
+    if (s == ${SHAPES.cruiser}) {
+      float d = sdHull(q, 0.4, 13.2, 15.6, 8.0, 1.1);
+      for (int i = 0; i < 3; i++) {
+        float x = 2.6 + 3.8 * float(i);
+        d = min(d, sdRect(q, vec2(x, 3.6), vec2(x + 3.0, 6.5)));
+        d = min(d, sdRect(q, vec2(x, 9.5), vec2(x + 3.0, 12.4)));
+      }
+      return d;
+    }
+    if (s == ${SHAPES.carrier}) {
+      float hull = min(sdHull(q, 2.0, 11.2, 15.6, 8.0, 2.8), sdRect(q, vec2(0.4, 3.4), vec2(3.0, 12.6)));
+      return max(hull, -sdRect(q, vec2(5.4, 6.4), vec2(8.6, 9.6)));
+    }
+    // carrierHub: three carriers in formation
+    return min(min(sdHull(q, 0.6, 6.2, 9.0, 3.4, 1.9), sdHull(q, 0.6, 6.2, 9.0, 12.6, 1.9)), sdHull(q, 7.2, 12.8, 15.6, 8.0, 1.9));
+  }
+
   float sdShape(vec2 p, int s) {
+    if (s >= ${SHAPES.megaship}) return sdShip(vec2(8.0 + 9.0 * p.x, 8.0 - 9.0 * p.y), s) / 9.0;
     if (s == ${SHAPES.dot}) return length(p) - 0.55;
     if (s == ${SHAPES.triangle}) return sdTriangle(p + vec2(0.0, 0.1), 0.72);
     if (s == ${SHAPES.triangleDown}) return sdTriangle(vec2(p.x, -p.y) + vec2(0.0, 0.1), 0.72);
@@ -150,7 +201,7 @@ export class PoiLayer {
     const v = new THREE.Vector3();
     pois.forEach((p, i) => {
       edToWorld(p.pos, v).toArray(this.world, i * 3);
-      shapes[i] = SHAPES[categoryInfo(p.category).shape];
+      shapes[i] = SHAPES[poiShape(p)];
       this.sizes[i] = markerSize(p);
       // Roughly: the panel font is ~0.55 em per character, plus padding.
       this.labelWidth[i] = p.name.length * LABEL_FONT_PX * 0.56 + 10;
@@ -310,12 +361,16 @@ function zoomAt(depth: number): number {
   return Math.min(Math.max(SIZE_REF_DISTANCE / depth, MIN_ZOOM), 1);
 }
 
+/** Ship pictograms fill 16/18 of their sprite, and are drawn a size up: they're long and thin. */
+const SHIP_SIZE = 18;
+
 function markerSize(p: Poi): number {
   if (p.category === "carrierHub") {
     // 10 carriers (the least a hub has) to ~120 at the busiest.
     const t = Math.min(Math.max(Math.log10(p.weight ?? 10) - 1, 0), 1.1);
-    return BASE_SIZE * (0.75 + 0.45 * t);
+    return SHIP_SIZE * (0.8 + 0.3 * t);
   }
+  if (isShip(poiShape(p))) return SHIP_SIZE;
   if (p.category === "planetaryNebula") return BASE_SIZE * 0.8;
   return BASE_SIZE;
 }

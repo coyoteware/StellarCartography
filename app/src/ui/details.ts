@@ -18,7 +18,7 @@ import {
   type Vec3,
   type VisitedSystem,
 } from "../api";
-import { categoryInfo, glyph, type Poi } from "../poi";
+import { glyph, poiShape, type Poi } from "../poi";
 import { SOL, distance } from "../renderer/coords";
 import { h, type Child } from "./dom";
 import { errorText } from "./toast";
@@ -219,13 +219,12 @@ export class SystemPanel {
     if (places.length === 0) return null;
     const list = h("ul", "places");
     for (const p of places) {
-      const info = categoryInfo(p.category);
       // Codex sites and carrier hubs are named after their system: say what they are instead.
       const named = p.name.toLowerCase() !== system.name.toLowerCase();
       const li = h(
         "li",
         "place",
-        h("div", "row", glyph(info.shape), h("span", "name", named ? p.name : p.kind)),
+        h("div", "row", glyph(poiShape(p)), h("span", "name", named ? p.name : p.kind)),
         named && h("div", "muted small", p.kind),
         p.summary && h("div", "small", p.summary),
       );

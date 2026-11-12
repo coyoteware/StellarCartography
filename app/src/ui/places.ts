@@ -14,7 +14,7 @@ import {
   type Vec3,
   type ViewSettings,
 } from "../api";
-import { CATEGORIES, categoryInfo, glyph, loadPoi, poisInSystem, searchPoi, type Poi, type PoiData } from "../poi";
+import { CATEGORIES, glyph, loadPoi, poiShape, poisInSystem, searchPoi, type Poi, type PoiData } from "../poi";
 import { distance } from "../renderer/coords";
 import { PoiLayer } from "../renderer/poi";
 import { button, h, type Child } from "./dom";
@@ -319,7 +319,7 @@ export class PlacesUi {
     const b = button("", () => this.deps.onPick(p), "poi-row");
     b.title = p.summary ?? describePoi(p);
     b.append(
-      glyph(categoryInfo(p.category).shape),
+      glyph(poiShape(p)),
       h("span", "text", h("span", "name", p.name), h("span", "meta", describePoi(p))),
       h("span", "dist", ly(dist)),
     );
