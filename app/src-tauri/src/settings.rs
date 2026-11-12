@@ -19,6 +19,8 @@ pub struct Settings {
     pub details_source: OnlineSource,
     /// Offer an update when the catalogue or populated systems are over a week old.
     pub update_reminders: bool,
+    /// Commander names whose last known position is fetched from EDSM.
+    pub friends: Vec<String>,
     pub view: ViewSettings,
     /// Keyboard shortcuts the user changed: action id → its two keys ("" is
     /// an empty slot). Actions not listed keep the web view's defaults.
@@ -32,6 +34,7 @@ impl Default for Settings {
             journal_dir: None,
             details_source: OnlineSource::default(),
             update_reminders: true,
+            friends: Vec::new(),
             view: ViewSettings::default(),
             keys: BTreeMap::new(),
         }
@@ -58,6 +61,8 @@ pub struct ViewSettings {
     pub poi: bool,
     /// Point-of-interest categories switched off, in the directory and on the map.
     pub poi_hidden: Vec<String>,
+    /// Draw friends' last known positions (the names are `Settings::friends`).
+    pub friends: bool,
 }
 
 impl Default for ViewSettings {
@@ -74,6 +79,7 @@ impl Default for ViewSettings {
             poi: true,
             // Thousands of catalogue entries: they'd crowd out everything else.
             poi_hidden: vec!["planetaryNebula".into()],
+            friends: true,
         }
     }
 }
@@ -139,6 +145,8 @@ mod tests {
         assert!(partial.view.poi, "files from before the points of interest");
         assert_eq!(partial.view.poi_hidden, ["planetaryNebula"]);
         assert_eq!(partial.details_source, OnlineSource::Spansh);
+        assert!(partial.view.friends, "files from before the friends layer");
+        assert!(partial.friends.is_empty(), "files from before the friends list");
 
         assert!(partial.update_reminders, "reminders are on unless turned off");
         assert!(partial.keys.is_empty(), "files from before the key bindings");

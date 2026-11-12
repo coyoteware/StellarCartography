@@ -141,6 +141,7 @@ struct SettingsView {
     journal_dir_found: bool,
     details_source: OnlineSource,
     update_reminders: bool,
+    friends: Vec<String>,
     view: ViewSettings,
     keys: BTreeMap<String, Vec<String>>,
 }
@@ -407,6 +408,7 @@ fn get_settings(state: State<AppState>) -> CmdResult<SettingsView> {
         journal_dir_custom: settings.journal_dir.is_some(),
         details_source: settings.details_source,
         update_reminders: settings.update_reminders,
+        friends: settings.friends.clone(),
         view: settings.view.clone(),
         keys: settings.keys.clone(),
     })
@@ -591,6 +593,65 @@ async fn system_details(
     let online = state.online.lookup(first, id64, &name, refresh).await;
     let base = SystemDetails { links: galaxy_core::details::links(id64, &name, None), ..Default::default() };
     Ok(galaxy_core::details::merge(galaxy_core::details::combine(journal, online), base))
+}
+
+// --- Friends -------------------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FriendStatus {
+    name: String,
+    /// `None` when the lookup failed; `error` says why.
+    position: Option<galaxy_core::friends::FriendPosition>,
+    error: Option<String>,
+}
+
+/// Saves the friends list: trimmed, deduplicated case-insensitively, order kept.
+#[tauri::command]
+fn set_friends(state: State<AppState>, names: Vec<String>) -> CmdResult<()> {
+    let mut seen: Vec<String> = Vec::new();
+    let mut friends = Vec::new();
+    for name in names {
+        let name = name.trim().to_string();
+        let key = name.to_lowercase();
+        if !name.is_empty() && !seen.contains(&key) {
+            seen.push(key);
+            friends.push(name);
+        }
+    }
+    let mut settings = state.settings.lock().map_err(err)?;
+    if settings.friends != friends {
+        settings.friends = friends;
+        save_settings(&state, &settings)?;
+    }
+    Ok(())
+}
+
+/// The last known EDSM position of every commander on the friends list, one
+/// lookup each (throttled). A friend who failed keeps their place in the
+/// list with the error. `refresh` skips the short cache.
+#[tauri::command]
+async fn friend_positions(state: State<'_, AppState>, refresh: bool) -> CmdResult<Vec<FriendStatus>> {
+    let names = state.settings.lock().map_err(err)?.friends.clone();
+    let mut out = Vec::with_capacity(names.len());
+    for name in names {
+        match state.online.friend_position(&name, refresh).await {
+            Ok(p) => out.push(FriendStatus { name, position: Some(p), error: None }),
+            Err(e) => out.push(FriendStatus { name, position: None, error: Some(format!("{e:#}")) }),
+        }
+    }
+    Ok(out)
+}
+
+/// Commander names seen in the journals' `Friends` and wing events, newest
+/// sighting first: suggestions for the friends list.
+#[tauri::command]
+fn journal_friends(state: State<AppState>) -> CmdResult<Vec<String>> {
+    let mut source = state.commander.lock().map_err(err)?;
+    match source.as_mut() {
+        Some(s) => s.friend_names().map_err(err),
+        None => Ok(Vec::new()),
+    }
 }
 
 // --- Route plotting ------------------------------------------------------------
@@ -1058,6 +1119,9 @@ pub fn run() {
             cancel_poi_update,
             poi_update_status,
             ship_loadout,
+            set_friends,
+            friend_positions,
+            journal_friends,
             plot_route,
             cancel_plot,
             saved_route,

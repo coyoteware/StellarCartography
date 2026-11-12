@@ -39,6 +39,8 @@ export interface ViewSettings {
   poi: boolean;
   /** Point-of-interest categories switched off (a `PoiCategory` id, see poi.ts). */
   poiHidden: string[];
+  /** Draw friends' last known positions (the names are `Settings.friends`). */
+  friends: boolean;
 }
 
 /** Where the details panel looks systems up online; the other site is the fallback. */
@@ -53,6 +55,8 @@ export interface Settings {
   detailsSource: OnlineSource;
   /** Offer an update when the catalogue or populated systems are over a week old. */
   updateReminders: boolean;
+  /** Commander names whose last known position is fetched from EDSM. */
+  friends: string[];
   view: ViewSettings;
   /** Keyboard shortcuts the user changed: action id → its two keys (see keys.ts). */
   keys: Record<string, string[]>;
@@ -262,6 +266,39 @@ export interface SystemDetails {
   /** Pages about this system on EDSM, Inara and Spansh. */
   links: { label: string; url: string }[];
 }
+
+// --- Friends (crates/galaxy-core/src/friends.rs) --------------------------------
+
+/** What EDSM last knew about one commander. */
+export interface FriendPosition {
+  name: string;
+  /** False when EDSM has no commander by this name (or the profile hides everything). */
+  known: boolean;
+  system: string | null;
+  /** In-game coordinates (ly); null when the system has none on EDSM. */
+  pos: Vec3 | null;
+  /** When EDSM last saw them there ("YYYY-MM-DD HH:MM:SS" UTC); private profiles hide it. */
+  date: string | null;
+  /** The station they were docked at, when docked. */
+  dockedAt: string | null;
+  ship: string | null;
+  /** Their EDSM profile page. */
+  profileUrl: string | null;
+}
+
+/** One friends-list lookup: the position, or why there isn't one. */
+export interface FriendStatus {
+  name: string;
+  position: FriendPosition | null;
+  error: string | null;
+}
+
+/** Last known positions of the commanders in Settings → Friends. `refresh` skips the short cache. */
+export const friendPositions = (refresh = false) => invoke<FriendStatus[]>("friend_positions", { refresh });
+/** Saves the friends list (trimmed and deduplicated by the backend). */
+export const setFriends = (names: string[]) => invoke<void>("set_friends", { names });
+/** Names seen on the in-game friends list or in wings, newest first — suggestions. */
+export const journalFriends = () => invoke<string[]>("journal_friends");
 
 // --- Route plotting (app/src-tauri/src/routes.rs) ------------------------------
 

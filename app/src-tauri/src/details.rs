@@ -10,6 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use galaxy_core::details::{self, iso_from_unix, RemoteStatus, Source, SystemDetails};
+use galaxy_core::friends::{self, FriendPosition};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
@@ -30,11 +31,17 @@ const FRESH: Duration = Duration::from_secs(60 * 60);
 const KEEP_DAYS: i64 = 30;
 /// Minimum gap between requests to the same site.
 const MIN_GAP: Duration = Duration::from_millis(250);
+/// Friend positions younger than this are served from memory; EDSM only
+/// learns a move when the friend's journal uploader sends it anyway.
+const FRIEND_FRESH: Duration = Duration::from_secs(60);
 
 pub struct Online {
     client: reqwest::Client,
     cache: Option<Mutex<Connection>>,
     last_request: Mutex<HashMap<&'static str, Instant>>,
+    /// Friend positions by lowercased commander name (in memory only:
+    /// they're stale the moment the friend jumps).
+    friends: Mutex<HashMap<String, (Instant, FriendPosition)>>,
 }
 
 fn now() -> i64 {
@@ -50,7 +57,25 @@ impl Online {
             .build()
             .expect("HTTP client");
         let cache = open_cache(cache_path).map_err(|e| eprintln!("details cache unavailable: {e:#}")).ok().map(Mutex::new);
-        Self { client, cache, last_request: Mutex::new(HashMap::new()) }
+        Self { client, cache, last_request: Mutex::new(HashMap::new()), friends: Mutex::new(HashMap::new()) }
+    }
+
+    /// A commander's last known position from EDSM. `refresh` skips the
+    /// short in-memory cache.
+    pub async fn friend_position(&self, name: &str, refresh: bool) -> Result<FriendPosition> {
+        let key = name.to_lowercase();
+        if !refresh {
+            let cached = self.friends.lock().unwrap_or_else(|e| e.into_inner()).get(&key).cloned();
+            if let Some((at, p)) = cached {
+                if at.elapsed() < FRIEND_FRESH {
+                    return Ok(p);
+                }
+            }
+        }
+        let body = self.get("EDSM", &friends::url(name)).await?;
+        let p = friends::parse(name, &body)?;
+        self.friends.lock().unwrap_or_else(|e| e.into_inner()).insert(key, (Instant::now(), p.clone()));
+        Ok(p)
     }
 
     /// Looks the system up on `first`, and on the other site unless `first`

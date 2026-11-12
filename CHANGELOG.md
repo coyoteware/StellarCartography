@@ -3,6 +3,13 @@
 ## Unreleased
 
 ### New
+- **Friends on the map.** Settings → Friends takes commander names and marks
+  each one's last known position as an ice-blue pin with a name label (its
+  own layer, Layers → Friends). Positions come from EDSM, so a friend shows
+  up only if they upload their journals there with a public flight log, and
+  only as fresh as their last upload (hover a marker for the system, ship
+  and when they were seen; click to select the system). Names seen on your
+  in-game friends list or in your wing are suggested as you type.
 - **Route plotting.** A Route panel under the search box plots routes on
   Spansh: the neutron plotter (jump range and efficiency), the fuel-exact
   galaxy plotter (using the ship from your journals, engineering included),
@@ -18,12 +25,12 @@
   Squadron carriers are left out. It goes with Layers → Travel history.
 
 ### Changed
-- **Map markers.** You, your home system and your carrier are LCARS block
-  pins: a solid block in the system's colour (accent, lilac, peach) with a
-  pictogram cut out of it, standing beside its star and pointing at it. Hover
-  a pin for what it is, click it to select the system. Megaships, the
-  expeditions' carriers (DSSA, OASIS, PIONEER) and carrier hubs are drawn as
-  ships seen from above instead of squares and dots.
+- **Map markers.** You, your friends, your home system and your carrier are
+  LCARS block pins: a solid block in the system's colour (accent, ice, lilac,
+  peach) with a pictogram cut out of it, standing beside its star and pointing
+  at it. Hover a pin for what it is, click it to select the system. Megaships,
+  the expeditions' carriers (DSSA, OASIS, PIONEER) and carrier hubs are drawn
+  as ships seen from above instead of squares and dots.
 - **No more edge around the explored regions.** The galaxy glow stands for
   every system, while the stars show only the catalogued ones, which
   are nearly complete within about 1,000 ly of Sol and around 1% beyond

@@ -533,6 +533,55 @@ ul.poi-list {
   color: var(--accent);
 }
 
+/* Friends' name labels beside their map markers (renderer/friends.ts). */
+.poi-label.friend {
+  color: var(--lcars-ice);
+}
+
+/* --- Friends (settings) ------------------------------------------------------ */
+
+ul.friends-list {
+  list-style: none;
+  margin: var(--space-2) 0;
+  padding: 0;
+}
+
+.friend-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-hair) 0;
+}
+
+.friend-row .name {
+  white-space: nowrap;
+}
+
+.friend-row .meta {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+#set-friend-name {
+  flex: 1;
+  height: 28px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-well);
+  color: var(--text);
+  font: inherit;
+}
+
+#set-friend-name:focus {
+  border-color: var(--accent);
+}
+
 /* --- Right column: layers, then the selected system ------------------------- */
 
 #right-column {

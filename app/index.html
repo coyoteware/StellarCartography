@@ -49,6 +49,7 @@
         <label><input type="checkbox" id="layer-route" checked /> Travel history</label>
         <label><input type="checkbox" id="layer-plot" checked /> Plotted route</label>
         <label><input type="checkbox" id="layer-poi" checked /> Points of interest</label>
+        <label><input type="checkbox" id="layer-friends" checked /> Friends</label>
         <div id="overlay">
           <label class="overlay-pick">
             Colour systems by
@@ -180,6 +181,28 @@
           Clicking a star shows its factions, Powerplay and stations. Systems you've visited use your journal; others
           are looked up online, falling back to the other site if the first is down. Spansh has Powerplay and landing
           pads, EDSM doesn't. Answers are cached for an hour.
+        </p>
+      </section>
+      <section>
+        <h2>Friends</h2>
+        <ul id="set-friends-list" class="friends-list"></ul>
+        <div class="buttons">
+          <input
+            id="set-friend-name"
+            type="text"
+            list="friend-suggestions"
+            placeholder="Commander name"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <datalist id="friend-suggestions"></datalist>
+          <button id="set-friend-add" type="button">Add</button>
+        </div>
+        <p class="muted small">
+          Marks each commander's last known position on the map (Layers → Friends), from EDSM. Only commanders who
+          upload their journals to EDSM (with EDMC or similar) and leave their flight log public can be found, and a
+          position is only as fresh as their last upload. Names seen on your in-game friends list are suggested as
+          you type.
         </p>
       </section>
       <section>

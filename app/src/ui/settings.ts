@@ -5,13 +5,16 @@
 import {
   datasetInfo,
   getSettings,
+  journalFriends,
   pickFolder,
   setDetailsSource,
+  setFriends,
   setUpdateReminders,
   setJournalDir,
   useDataDir,
   type DataStatus,
   type DirOrigin,
+  type FriendStatus,
   type OnlineSource,
   type Settings,
   type ViewSettings,
@@ -46,6 +49,10 @@ export interface SettingsDeps {
   onReminders: (on: boolean) => void;
   /** Opens the key list (Settings closes first). */
   onKeys: () => void;
+  /** The latest friend lookups, for the status beside each name. */
+  friends: () => FriendStatus[];
+  /** The friends list changed (it's saved already): refresh the markers. */
+  onFriends: () => void;
 }
 
 export class SettingsPanel {
@@ -120,6 +127,15 @@ export class SettingsPanel {
       this.deps.onView({ ...this.deps.view(), exposure: 1 });
     });
 
+    const friendName = $<HTMLInputElement>("set-friend-name");
+    $("set-friend-add").addEventListener("click", () => void this.addFriend());
+    friendName.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        void this.addFriend();
+      }
+    });
+
     $("set-keys").addEventListener("click", () => {
       this.close();
       this.deps.onKeys();
@@ -138,6 +154,21 @@ export class SettingsPanel {
       this.render(settings, status);
     } catch (e) {
       this.deps.toasts.error(`Couldn't load the settings: ${errorText(e)}`);
+      return;
+    }
+    // Suggestions can come in after the panel shows.
+    try {
+      const names = await journalFriends();
+      const list = $<HTMLDataListElement>("friend-suggestions");
+      list.replaceChildren(
+        ...names.map((n) => {
+          const opt = document.createElement("option");
+          opt.value = n;
+          return opt;
+        }),
+      );
+    } catch (e) {
+      console.error("friend suggestions:", e);
     }
   }
 
@@ -146,6 +177,70 @@ export class SettingsPanel {
     $("set-rebuild-confirm").hidden = true;
     $("set-populated-confirm").hidden = true;
     $("set-poi-confirm").hidden = true;
+  }
+
+  /** Redraws the friends list with each name's latest lookup. */
+  renderFriends(): void {
+    if (this.el.hidden || !this.settings) return;
+    const statuses = this.deps.friends();
+    const rows = this.settings.friends.map((name) => {
+      const li = document.createElement("li");
+      li.className = "friend-row";
+      const label = document.createElement("span");
+      label.className = "name";
+      label.textContent = name;
+      const meta = document.createElement("span");
+      meta.className = "meta";
+      const s = statuses.find((f) => f.name.toLowerCase() === name.toLowerCase());
+      if (s?.error) {
+        meta.textContent = s.error;
+        meta.classList.add("problem");
+      } else if (s?.position) {
+        const p = s.position;
+        if (!p.known) {
+          meta.textContent = "Not found on EDSM (no profile, or it's private).";
+        } else if (p.system) {
+          meta.textContent = p.system + (p.date ? ` · ${p.date}` : "");
+        } else {
+          meta.textContent = "On EDSM, but no position shared.";
+        }
+      }
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "close";
+      remove.setAttribute("aria-label", `Remove ${name}`);
+      remove.textContent = "×";
+      remove.addEventListener("click", () => void this.saveFriends(this.settings!.friends.filter((n) => n !== name)));
+      li.append(label, meta, remove);
+      return li;
+    });
+    const list = $("set-friends-list");
+    list.replaceChildren(...rows);
+    list.hidden = rows.length === 0;
+  }
+
+  private async addFriend(): Promise<void> {
+    const input = $<HTMLInputElement>("set-friend-name");
+    const name = input.value.trim();
+    if (!name || !this.settings) return;
+    if (this.settings.friends.some((n) => n.toLowerCase() === name.toLowerCase())) {
+      input.value = "";
+      return;
+    }
+    await this.saveFriends([...this.settings.friends, name]);
+    input.value = "";
+  }
+
+  private async saveFriends(names: string[]): Promise<void> {
+    if (!this.settings) return;
+    try {
+      await setFriends(names);
+      this.settings.friends = names;
+      this.renderFriends();
+      this.deps.onFriends();
+    } catch (e) {
+      this.deps.toasts.error(`Couldn't save the friends list: ${errorText(e)}`);
+    }
   }
 
   /** Refreshes the populated-systems line (it changes during a download). */
@@ -192,6 +287,7 @@ export class SettingsPanel {
 
     $<HTMLSelectElement>("set-details-source").value = s.detailsSource;
     $<HTMLInputElement>("set-update-reminders").checked = s.updateReminders;
+    this.renderFriends();
     this.renderPopulated();
     this.renderPoi();
 

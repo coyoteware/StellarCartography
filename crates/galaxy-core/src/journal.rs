@@ -45,6 +45,10 @@ pub enum Event {
     /// The current ship's modules; the line is kept whole and parsed on
     /// demand (see [`crate::ship`]).
     Loadout { timestamp: String },
+    /// Names seen on the friends list (`Friends`) or in a wing (`WingAdd`,
+    /// `WingJoin`), for suggesting commanders to follow. `status` is the
+    /// `Friends` event's (`Online`, `Added`, `Lost`...); wing events have none.
+    FriendsSeen { timestamp: String, names: Vec<String>, status: Option<String> },
     /// One of the owner's events about their own fleet carrier (`id` is its
     /// CarrierID, which is also its MarketID). Squadron carriers are left out.
     Carrier { timestamp: String, id: u64, update: CarrierUpdate },
@@ -128,6 +132,14 @@ impl Carrier {
         }
         self.at = Some(place);
     }
+}
+
+/// The latest `Friends`/wing sighting of one name.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct FriendSighting {
+    pub timestamp: String,
+    /// The last `Friends` status; `None` when only seen in a wing.
+    pub status: Option<String>,
 }
 
 /// The latest journal line describing a system or station.
@@ -253,6 +265,12 @@ struct RawEvent {
     market_id: Option<u64>,
     #[serde(rename = "Docked")]
     docked: Option<bool>,
+    #[serde(rename = "Status")]
+    status: Option<String>,
+    /// `WingJoin`'s wing members: names, or objects with a `Name`, depending
+    /// on the game version.
+    #[serde(rename = "Others")]
+    others: Option<Vec<serde_json::Value>>,
     #[serde(rename = "CarrierID")]
     carrier_id: Option<u64>,
     #[serde(rename = "CarrierType")]
@@ -269,7 +287,7 @@ struct RawEvent {
     location: Option<String>,
 }
 
-const INTERESTING: [&str; 13] = [
+const INTERESTING: [&str; 16] = [
     "\"FSDJump\"",
     "\"CarrierJump\"",
     "\"Location\"",
@@ -278,6 +296,9 @@ const INTERESTING: [&str; 13] = [
     "\"Docked\"",
     "\"ApproachSettlement\"",
     "\"Loadout\"",
+    "\"Friends\"",
+    "\"WingAdd\"",
+    "\"WingJoin\"",
     "\"CarrierBuy\"",
     "\"CarrierStats\"",
     "\"CarrierLocation\"",
@@ -318,6 +339,32 @@ pub fn parse_line(line: &str) -> Option<Event> {
         "Commander" => Some(Event::Commander { fid: raw.fid?, name: raw.name? }),
         "LoadGame" => Some(Event::Commander { fid: raw.fid?, name: raw.commander? }),
         "Loadout" => Some(Event::Loadout { timestamp: raw.timestamp.unwrap_or_default() }),
+        "Friends" => Some(Event::FriendsSeen {
+            timestamp: raw.timestamp.unwrap_or_default(),
+            names: vec![raw.name?],
+            status: raw.status,
+        }),
+        "WingAdd" => Some(Event::FriendsSeen {
+            timestamp: raw.timestamp.unwrap_or_default(),
+            names: vec![raw.name?],
+            status: None,
+        }),
+        "WingJoin" => {
+            let names: Vec<String> = raw
+                .others?
+                .into_iter()
+                .filter_map(|v| match v {
+                    serde_json::Value::String(s) => Some(s),
+                    serde_json::Value::Object(o) => o.get("Name").and_then(|n| n.as_str()).map(String::from),
+                    _ => None,
+                })
+                .collect();
+            (!names.is_empty()).then(|| Event::FriendsSeen {
+                timestamp: raw.timestamp.unwrap_or_default(),
+                names,
+                status: None,
+            })
+        }
         "CarrierBuy" | "CarrierStats" | "CarrierLocation" | "CarrierJumpRequest" | "CarrierJumpCancelled" => {
             // Squadron carriers write these too; older journals don't say which.
             if raw.carrier_type.as_deref().is_some_and(|t| t != "FleetCarrier") {
@@ -388,6 +435,8 @@ pub struct Reader {
     pub snapshots: Snapshots,
     /// The newest `Loadout` line per commander FID, for the route plotter.
     pub loadouts: HashMap<String, Snapshot>,
+    /// Latest friends-list or wing sighting per name, across all commanders.
+    pub friends: BTreeMap<String, FriendSighting>,
     current_fid: Option<String>,
     current_file: Option<PathBuf>,
     offset: u64,
@@ -492,6 +541,16 @@ impl Reader {
                         *slot = Snapshot { timestamp, line: line.into() };
                     }
                 }
+                Some(Event::FriendsSeen { timestamp, names, status }) => {
+                    for name in names {
+                        let slot = self.friends.entry(name).or_default();
+                        if slot.timestamp.as_str() <= timestamp.as_str() {
+                            // A wing sighting keeps the last Friends status:
+                            // it says they're in a wing, not off the list.
+                            *slot = FriendSighting { timestamp: timestamp.clone(), status: status.clone().or(slot.status.take()) };
+                        }
+                    }
+                }
                 Some(Event::Carrier { timestamp, id, update }) => {
                     // Only the owner writes these, so they belong to whoever is playing.
                     let Some(fid) = self.current_fid.clone() else { continue };
@@ -548,6 +607,25 @@ impl JournalSource {
             Some(fid) => loadouts.get(fid),
             None => loadouts.values().max_by(|a, b| a.timestamp.cmp(&b.timestamp)),
         })
+    }
+
+    /// Names seen on the friends list or in a wing, newest sighting first.
+    /// Leaves out names whose last `Friends` status says they're not a friend
+    /// (`Lost`, `Declined`, `Requested`), and the journals' own commanders.
+    pub fn friend_names(&mut self) -> Result<Vec<String>> {
+        self.history()?;
+        let reader = self.reader.as_ref().unwrap();
+        let own: Vec<String> = reader.history.commanders.values().map(|c| c.name.to_lowercase()).collect();
+        let mut seen: Vec<(&String, &FriendSighting)> = reader
+            .friends
+            .iter()
+            .filter(|(name, s)| {
+                let gone = matches!(s.status.as_deref(), Some("Lost" | "Declined" | "Requested"));
+                !gone && !own.contains(&name.to_lowercase())
+            })
+            .collect();
+        seen.sort_by(|a, b| b.1.timestamp.cmp(&a.1.timestamp).then(a.0.cmp(b.0)));
+        Ok(seen.into_iter().map(|(name, _)| name.clone()).collect())
     }
 }
 
@@ -739,6 +817,31 @@ mod tests {
         let c = snaps.stations_in(2).next().unwrap();
         assert_eq!(c.docked.as_ref().unwrap().line, "docked in 1");
         assert_eq!(c.docked_arrival.as_ref().unwrap().line, "jumped to 2");
+    }
+
+    #[test]
+    fn collects_friend_names_for_suggestions() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut f = File::create(dir.path().join("Journal.2026-10-01T180000.01.log")).unwrap();
+        writeln!(f, "{COMMANDER}").unwrap();
+        writeln!(f, r#"{{ "timestamp":"2026-10-01T18:01:00Z", "event":"Friends", "Status":"Online", "Name":"Alice" }}"#).unwrap();
+        writeln!(f, r#"{{ "timestamp":"2026-10-01T18:02:00Z", "event":"Friends", "Status":"Lost", "Name":"Bob" }}"#).unwrap();
+        writeln!(f, r#"{{ "timestamp":"2026-10-01T18:03:00Z", "event":"WingAdd", "Name":"Carol" }}"#).unwrap();
+        writeln!(f, r#"{{ "timestamp":"2026-10-01T18:04:00Z", "event":"WingJoin", "Others":["Dave", {{"Name":"Erin"}}] }}"#).unwrap();
+        // Our own commander coming online on a friend's list must not suggest ourselves.
+        writeln!(f, r#"{{ "timestamp":"2026-10-01T18:05:00Z", "event":"Friends", "Status":"Online", "Name":"Test Pilot" }}"#).unwrap();
+        // A wing sighting after "Lost" doesn't make Bob a friend again...
+        writeln!(f, r#"{{ "timestamp":"2026-10-01T18:06:00Z", "event":"WingAdd", "Name":"Bob" }}"#).unwrap();
+        f.flush().unwrap();
+
+        let mut source = JournalSource::new(dir.path().to_path_buf());
+        assert_eq!(source.friend_names().unwrap(), ["Dave", "Erin", "Carol", "Alice"]);
+
+        // ...but being re-added does.
+        writeln!(f, r#"{{ "timestamp":"2026-10-01T18:07:00Z", "event":"Friends", "Status":"Added", "Name":"Bob" }}"#).unwrap();
+        f.flush().unwrap();
+        source.poll().unwrap();
+        assert_eq!(source.friend_names().unwrap(), ["Bob", "Dave", "Erin", "Carol", "Alice"]);
     }
 
     #[test]

@@ -8,8 +8,10 @@
 //! * [`ship`]: the commander's ship from the journal's `Loadout` event, as
 //!   the fuel model Spansh's route plotters ask for.
 //! * [`visited`]: reading the game's `VisitedStarsCache.dat`.
+//! * [`friends`]: other commanders' last known positions from EDSM.
 
 pub mod details;
+pub mod friends;
 pub mod id64;
 pub mod journal;
 pub mod octree;

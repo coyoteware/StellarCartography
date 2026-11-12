@@ -8,6 +8,7 @@ import {
   buildStatus,
   commanderHistory,
   datasetInfo,
+  friendPositions,
   getSettings,
   getSystem,
   onCommanderCarrier,
@@ -20,6 +21,7 @@ import {
   type CarrierPlace,
   type CommanderPayload,
   type DataStatus,
+  type FriendStatus,
   type Jump,
   type SystemInfo,
   type Vec3,
@@ -30,6 +32,7 @@ import { Bindings, Keyboard, chordLabel, loadLayout } from "./keys";
 import type { Poi } from "./poi";
 import { CommanderLayer, SelectionMarker } from "./renderer/commander";
 import { SGR_A, SOL, edToWorld, worldToEd } from "./renderer/coords";
+import { FriendsLayer, type FriendMarker } from "./renderer/friends";
 import { GalaxyGlow } from "./renderer/glow";
 import { PinSet, type PinItem } from "./renderer/pins";
 import { PointCloud } from "./renderer/pointcloud";
@@ -60,9 +63,10 @@ const catalogue = new CatalogueUi(toasts);
 const commander = new CommanderLayer();
 const selection = new SelectionMarker();
 const plot = new PlotLayer();
+const friends = new FriendsLayer($("poi-labels"));
 const homePin = new PinSet("home", $("poi-labels"));
 const carrierPin = new PinSet<PinItem & { carrier: Carrier; place: CarrierPlace }>("carrier", $("poi-labels"));
-view.overlay.add(commander.object, selection.object, plot.object, homePin.object, carrierPin.object);
+view.overlay.add(commander.object, selection.object, plot.object, friends.object, homePin.object, carrierPin.object);
 
 let cloud: PointCloud | null = null;
 let glow: GalaxyGlow | null = null;
@@ -81,6 +85,7 @@ let viewSettings: ViewSettings = {
   highlights: {},
   poi: true,
   poiHidden: ["planetaryNebula"],
+  friends: true,
 };
 let reportedTileFailures = 0;
 /**
@@ -158,6 +163,8 @@ const settingsPanel = new SettingsPanel({
   onPoiUpdate: () => void places.startUpdate(),
   onReminders: (on) => (updateReminders = on),
   onKeys: () => keysCard.open(),
+  friends: () => friendStatuses,
+  onFriends: () => void refreshFriends(),
 });
 overlay.onStatus = () => settingsPanel.renderPopulated();
 places.onStatus = () => settingsPanel.renderPoi();
@@ -228,11 +235,13 @@ function applyView(next: ViewSettings, persist = true): void {
   commander.object.visible = next.route;
   carrierPin.visible = next.route;
   plot.object.visible = next.plot;
+  friends.visible = next.friends;
   $<HTMLInputElement>("layer-glow").checked = next.glow;
   $<HTMLInputElement>("layer-stars").checked = next.stars;
   $<HTMLInputElement>("layer-route").checked = next.route;
   $<HTMLInputElement>("layer-plot").checked = next.plot;
   $<HTMLInputElement>("layer-poi").checked = next.poi;
+  $<HTMLInputElement>("layer-friends").checked = next.friends;
   overlay.sync();
   places.sync();
   applyDimming();
@@ -454,6 +463,39 @@ function describeCarrier(c: Carrier, place: CarrierPlace): string {
   return parts.join(" · ");
 }
 
+// --- Friends -------------------------------------------------------------------
+
+/** How often friends' EDSM positions are re-fetched. */
+const FRIEND_POLL_MS = 5 * 60_000;
+/** The latest lookup per friend, for the settings panel's status lines. */
+let friendStatuses: FriendStatus[] = [];
+
+/** Fetches every friend's last known position and places the markers. */
+async function refreshFriends(refresh = false): Promise<void> {
+  try {
+    friendStatuses = await friendPositions(refresh);
+  } catch (e) {
+    console.error("friend positions:", e);
+    return;
+  }
+  const markers: FriendMarker[] = [];
+  for (const f of friendStatuses) {
+    const p = f.position;
+    if (!p?.system) continue;
+    let pos = p.pos;
+    if (!pos) {
+      // EDSM knows the system but not its coordinates: try the catalogue.
+      const name = p.system.toLowerCase();
+      const found = await searchSystems(p.system).catch(() => []);
+      pos = found.find((s) => s.name.toLowerCase() === name)?.pos ?? null;
+    }
+    if (pos) markers.push({ name: p.name, system: p.system, pos, date: p.date, dockedAt: p.dockedAt, ship: p.ship });
+  }
+  friends.set(markers);
+  settingsPanel.renderFriends();
+  view.wake();
+}
+
 /** Selects a system by name (its catalogue entry when it has one), e.g. a pin's. */
 async function selectNamed(name: string, pos: Vec3, id64: string | null = null): Promise<void> {
   const mine = ++selectionSeq;
@@ -461,6 +503,17 @@ async function selectNamed(name: string, pos: Vec3, id64: string | null = null):
   if (mine !== selectionSeq) return;
   const match = found.find((s) => s.name.toLowerCase() === name.toLowerCase());
   select(match ?? { rowid: null, id64, name, pos }, false);
+}
+
+const selectFriend = (f: FriendMarker) => selectNamed(f.system, f.pos);
+
+/** "CMDR Name · System · docked at X · seen 2026-11-09 18:00" for the hover label. */
+function describeFriend(f: FriendMarker): string {
+  const parts = [`CMDR ${f.name}`, f.system];
+  if (f.dockedAt) parts.push(`docked at ${f.dockedAt}`);
+  if (f.ship) parts.push(f.ship);
+  if (f.date) parts.push(`seen ${f.date}`);
+  return parts.join(" · ");
 }
 
 // --- UI wiring ---------------------------------------------------------------
@@ -488,7 +541,7 @@ $("go-cmdr").addEventListener("click", goCommander);
 $("go-home").addEventListener("click", goHome);
 $("go-squadron").addEventListener("click", goSquadron);
 $("open-settings").addEventListener("click", () => void settingsPanel.open());
-for (const layer of ["glow", "stars", "route", "plot", "poi"] as const) {
+for (const layer of ["glow", "stars", "route", "plot", "poi", "friends"] as const) {
   $<HTMLInputElement>(`layer-${layer}`).addEventListener("change", (e) =>
     applyView({ ...viewSettings, [layer]: (e.target as HTMLInputElement).checked }),
   );
@@ -580,7 +633,7 @@ function setPoiHover(i: number | null): void {
   view.wake();
 }
 
-type PinHit = { kind: "you" | "carrier" | "home"; index: number };
+type PinHit = { kind: "you" | "carrier" | "home" | "friend"; index: number };
 
 /** The pin under (x, y): they draw over everything, so they pick first. */
 function pickPin(x: number, y: number, radius: number): PinHit | null {
@@ -594,7 +647,8 @@ function pickPin(x: number, y: number, radius: number): PinHit | null {
     const index = set.pick(view.camera, w, h, x, y, radius);
     if (index !== null) return { kind, index };
   }
-  return null;
+  const index = friends.pick(view.camera, w, h, x, y, radius);
+  return index === null ? null : { kind: "friend", index };
 }
 
 function describePin(hit: PinHit): string {
@@ -610,6 +664,8 @@ function describePin(hit: PinHit): string {
     }
     case "home":
       return `Home · ${HOME.name}`;
+    case "friend":
+      return describeFriend(friends.friends[hit.index]);
   }
 }
 
@@ -627,6 +683,8 @@ function selectPin(hit: PinHit): void {
     }
     case "home":
       return select(HOME, false);
+    case "friend":
+      return void selectFriend(friends.friends[hit.index]);
   }
 }
 
@@ -762,7 +820,7 @@ view.onFrame((now, dt) => {
   plot.update(now);
   overlay.layer?.update(view.pixelRatio);
   places.layer?.update(view.camera, canvas.clientWidth, canvas.clientHeight, view.pixelRatio, !view.idle);
-  for (const pins of [commander.pin, homePin, carrierPin]) {
+  for (const pins of [friends, commander.pin, homePin, carrierPin]) {
     pins.update(view.camera, canvas.clientWidth, canvas.clientHeight, !view.idle);
   }
   const stats = cloud?.stats() ?? null;
@@ -791,6 +849,8 @@ if (import.meta.env.DEV) {
     sc: {
       view,
       commander,
+      friends,
+      refreshFriends,
       catalogue,
       overlay,
       places,
@@ -845,6 +905,8 @@ async function boot(): Promise<void> {
   }
   // After the commander, so the saved route and ship know who's flying.
   void routeUi.load();
+  void refreshFriends();
+  window.setInterval(() => void refreshFriends(), FRIEND_POLL_MS);
   await galaxy;
 }
 
