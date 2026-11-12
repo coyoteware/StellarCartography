@@ -320,11 +320,9 @@ fn parse_result(request: &RouteRequest, result: serde_json::Value) -> Result<Plo
             .context("unexpected Spansh answer (a stop with no name)")?
             .to_string();
         let pos = ["x", "y", "z"].map(|k| number(s.get(k)).unwrap_or(0.0));
-        let fuel_left = match number(s.get("fuel_in_tank")) {
-            // A carrier can also sell tritium out of its market.
-            Some(tank) => Some(tank + number(s.get("tritium_in_market")).unwrap_or(0.0)),
-            None => None,
-        };
+        // A carrier can also sell tritium out of its market.
+        let fuel_left = number(s.get("fuel_in_tank"))
+            .map(|tank| tank + number(s.get("tritium_in_market")).unwrap_or(0.0));
         waypoints.push(Waypoint {
             name,
             id64: s.get("id64").and_then(id64_value),
