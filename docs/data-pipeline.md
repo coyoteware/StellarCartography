@@ -51,11 +51,17 @@ One pass over the stream feeds three outputs.
 **Density maps**
 - Two 2048×2048 PNGs of the galactic plane.
 - `coverage.png` counts catalogued systems per pixel, so it shows where players have been.
-- `density.png` estimates true star density, and drives the galaxy glow:
-  - an id64 includes the system's index within its boxel;
-  - the highest index seen in a boxel is a lower bound on how many systems it holds;
-  - the map sums those bounds over about 52M boxels.
-- While reading, each boxel costs one `u64`: the id64, minus its body bits, of the highest-numbered system seen there. That one value holds both the boxel and the index. The table is sized up front, about 0.6 GiB.
+- `density.png` estimates how many systems each pixel's column holds, logged or not, and drives the galaxy glow ([`density.rs`](../crates/ingest/src/density.rs) has the details):
+  - an id64 includes the system's index within its boxel, numbered from 0;
+  - so the highest index seen in a boxel, and how many of its systems were seen, estimate how many it holds (the "German tank" estimate);
+  - summing those only counts boxels someone has logged, which followed exploration: about 1 system per ly² around the bubble, ten times less 10,000 ly out, with the busy routes as streaks. Up to November 2026 the map was drawn that way;
+  - instead, for each mass code, the boxels logged around a pixel are a sample of all the boxels there. Their average count is scaled up to every boxel in the column, along the glow's own vertical profile. The window grows up to about 800 ly until it holds 12 logged boxels, and the estimate fades out where even that is too few;
+  - logged boxels hold at least one system, but in sparse space many boxels hold none. Treating the counts as Poisson, the average over non-empty boxels gives the average over all of them, so thinly populated space stays dim;
+  - mass code a doesn't fill its boxels even around Sol (5% hold systems), so it's taken as a fixed share of mass code b, measured within 500 ly of Sol;
+  - along a line through Sol at right angles to the core, the old map fell from 0.84 to 0.09 systems per ly² between Sol and 8–10 kly; the new one goes from 0.90 to 0.49.
+- While reading, each boxel costs one `u64`: the id64, minus its body bits, of the highest-numbered system seen there, with the number of systems seen in the top 9 bits where the body number would go. That one value holds the boxel, the index and the count. The table is sized up front, about 0.6 GiB.
+- Drawing `density.png` takes about 23 s on a 24-thread desktop (11 s before the estimate above).
+- `ingest --maps --out <data>` redraws both maps from an existing `galaxy.sqlite` without downloading anything: about a minute, 37 s of it reading the database.
 
 ### Storage
 

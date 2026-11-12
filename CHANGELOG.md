@@ -12,6 +12,29 @@
   clipboard after each jump for the in-game galaxy map. The route survives a
   restart.
 
+### Changed
+- **No more edge around the explored regions.** The galaxy glow stands for
+  every system, while the stars show only the catalogued ones, which
+  are nearly complete within about 1,000 ly of Sol and around 1% beyond
+  10,000 ly. Drawn on top of each other, the bubble and the busy routes
+  came out twice as bright as their surroundings and tinted orange, with a
+  hard edge where the catalogue thins out. Now the glow steps back by as much
+  light as the stars there already give, and distant stars take on the
+  glow's colour, so explored and unexplored space blend. Stars close to the
+  camera keep their own colours. Where stars would outshine the glow, as
+  along a busy route seen end on, they're dimmed to match it. The map is a
+  little darker overall, since nothing is counted twice; Settings → Display →
+  Brightness brings it back up.
+- **A galaxy glow that doesn't follow exploration.** The glow's density map
+  counted only the boxels someone had logged a system in, so it was brightest
+  where players had been: around the bubble, and in streaks along the busy
+  routes. It now treats the logged boxels around each spot as a sample of all
+  of them there and scales up, so the arms carry on through unexplored space,
+  the streaks are gone, and the outer arms reach the galaxy's edge. The new
+  map comes with the next catalogue rebuild, or straight away from an
+  existing build with `ingest --maps --out <data folder>` (about a minute, no
+  download).
+
 ## 0.2.0 (2026-11-10)
 
 ### New

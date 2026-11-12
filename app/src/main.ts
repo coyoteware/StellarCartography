@@ -278,13 +278,13 @@ async function loadGalaxy(status: Extract<DataStatus, { state: "ready" }>): Prom
   const [c, g] = await Promise.allSettled([PointCloud.load(), GalaxyGlow.load()]);
   if (c.status === "fulfilled") {
     cloud = c.value;
-    view.scene.add(cloud.object);
+    view.stars.add(cloud.object);
   } else {
     toasts.error(`Couldn't load the star tiles: ${errorText(c.reason)}`, { action: openSettings });
   }
   if (g.status === "fulfilled") {
     glow = g.value;
-    view.scene.add(glow.mesh);
+    view.backdrop.add(glow.mesh);
   } else {
     toasts.error(`Couldn't load the galaxy backdrop: ${errorText(g.reason)}`, { action: openSettings });
   }

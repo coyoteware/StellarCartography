@@ -13,6 +13,8 @@ const MAP_MIN_Z = -25000;
 const MAP_SIZE = 100000;
 const HALF_THICKNESS = 4000;
 const INTENSITY = 1 / 900;
+/** The glow fades in over these distances (ly) from the camera, where stars are resolved points. */
+export const GLOW_NEAR_FADE = [30, 1500] as const;
 
 const vertexShader = /* glsl */ `
   varying vec3 vWorld;
@@ -66,8 +68,8 @@ const fragmentShader = /* glsl */ `
       float h = mix(1600.0, 320.0, smoothstep(0.0, 9000.0, r));
       float profile = exp(-abs(p.y - uCore.y) / h);
       vec3 colour = mix(vec3(1.0, 0.80, 0.55), vec3(0.58, 0.70, 1.0), smoothstep(2500.0, 15000.0, r));
-      // Fade out right next to the camera so the actual stars take over.
-      float near = smoothstep(30.0, 1500.0, tt);
+      // Fade out right next to the camera, where stars are resolved points.
+      float near = smoothstep(${GLOW_NEAR_FADE[0].toFixed(1)}, ${GLOW_NEAR_FADE[1].toFixed(1)}, tt);
       acc += colour * d * d * profile * near * dt;
     }
     // Linear light; the tone mapping pass in view.ts compresses it.

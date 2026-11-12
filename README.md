@@ -202,6 +202,13 @@ cargo run --release -p ingest -- --populated --out data
 cargo run --release -p ingest -- --poi --out data
 ```
 
+`--maps` redraws `density.png` and `coverage.png` from the `galaxy.sqlite`
+already in `--out`, without downloading anything (about a minute):
+
+```bash
+cargo run --release -p ingest -- --maps --out data
+```
+
 ## Installer
 
 ```bash

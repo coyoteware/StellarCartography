@@ -199,6 +199,52 @@ fn expected_records(compressed: Option<u64>, limit: Option<u64>) -> usize {
     n.min(u64::from(Point::MAX_ROWID)) as usize
 }
 
+/// What [`rebuild_maps`] did.
+#[derive(Debug, Clone, Copy)]
+pub struct MapStats {
+    pub systems: u64,
+    pub seconds_read: f64,
+    pub seconds_draw: f64,
+}
+
+/// Redraws `density.png` and `coverage.png` from the `galaxy.sqlite` already
+/// in `dir`, without downloading anything: for when the way the maps are
+/// drawn changes. The new maps replace the old ones only once both are
+/// written.
+pub fn rebuild_maps(dir: &Path) -> Result<MapStats> {
+    let started = Instant::now();
+    let path = dir.join("galaxy.sqlite");
+    let db = rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .with_context(|| format!("open {}", path.display()))?;
+    let rows: i64 = db.query_row("SELECT coalesce(max(id), 0) FROM systems", [], |r| r.get(0))?;
+    let mut density = density::Accumulator::with_capacity((rows as f64 * density::BOXELS_PER_SYSTEM) as usize);
+    let mut read = 0u64;
+    let mut stmt = db.prepare("SELECT id64, x32, y32, z32 FROM systems WHERE id64 IS NOT NULL")?;
+    let mut systems = stmt.query([])?;
+    while let Some(row) = systems.next()? {
+        let id64: i64 = row.get(0)?;
+        let pos = [row.get::<_, i64>(1)?, row.get::<_, i64>(2)?, row.get::<_, i64>(3)?].map(|v| v as f32 / 32.0);
+        density.add_system(id64 as u64, pos);
+        read += 1;
+    }
+    if read == 0 {
+        bail!("{} holds no systems", path.display());
+    }
+    let seconds_read = started.elapsed().as_secs_f64();
+
+    let staging = dir.join(".maps");
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::create_dir_all(&staging).with_context(|| format!("create {}", staging.display()))?;
+    let result = density.write_pngs(&staging).and_then(|()| {
+        for name in ["density.png", "coverage.png"] {
+            std::fs::rename(staging.join(name), dir.join(name)).with_context(|| format!("replace {name}"))?;
+        }
+        Ok(())
+    });
+    let _ = std::fs::remove_dir_all(&staging);
+    result.map(|()| MapStats { systems: read, seconds_read, seconds_draw: started.elapsed().as_secs_f64() - seconds_read })
+}
+
 /// Runs the whole build into the staging folder. `progress` is called a few
 /// times a second; setting `cancel` stops the build with an error.
 pub fn build(opts: &Options, progress: &mut dyn FnMut(&Progress), cancel: Arc<AtomicBool>) -> Result<Built> {
@@ -507,6 +553,14 @@ mod tests {
         assert_eq!(x32, -9530 * 32 - 16);
         let built_at: String = db.query_row("SELECT value FROM meta WHERE key = 'built_at'", [], |r| r.get(0)).unwrap();
         assert!(built_at.parse::<u64>().unwrap() > 1_700_000_000);
+        drop(db);
+
+        // The maps can be drawn again from the database alone.
+        std::fs::remove_file(out.join("density.png")).unwrap();
+        assert_eq!(rebuild_maps(&out).unwrap().systems, 3);
+        assert!(out.join("density.png").is_file());
+        assert!(out.join("coverage.png").is_file());
+        assert!(!out.join(".maps").exists());
     }
 
     #[test]
