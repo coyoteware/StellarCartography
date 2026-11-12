@@ -8,10 +8,14 @@ import { dataUrl } from "../api";
 import { SGR_A, edToWorld } from "./coords";
 
 // Must match the octree root / density map extent in galaxy-core.
-const MAP_MIN_X = -50000;
-const MAP_MIN_Z = -25000;
-const MAP_SIZE = 100000;
-const HALF_THICKNESS = 4000;
+export const MAP_MIN_X = -50000;
+export const MAP_MIN_Z = -25000;
+export const MAP_SIZE = 100000;
+/**
+ * Half the slab's height. The light tapers to nothing before the slab ends
+ * (see the shader), so the bulge has no hard top and bottom seen side on.
+ */
+export const HALF_THICKNESS = 5000;
 const INTENSITY = 1 / 900;
 /** The glow fades in over these distances (ly) from the camera, where stars are resolved points. */
 export const GLOW_NEAR_FADE = [30, 1500] as const;
@@ -33,7 +37,8 @@ const fragmentShader = /* glsl */ `
   uniform float uIntensity;
   varying vec3 vWorld;
 
-  const int STEPS = 72;
+  const int STEPS = 80;
+  const float HALF_THICKNESS = ${HALF_THICKNESS.toFixed(1)};
   const vec2 MAP_MIN = vec2(${MAP_MIN_X.toFixed(1)}, ${MAP_MIN_Z.toFixed(1)});
   const float MAP_SIZE = ${MAP_SIZE.toFixed(1)};
 
@@ -66,7 +71,8 @@ const fragmentShader = /* glsl */ `
       float r = length(vec2(p.x - uCore.x, p.z - uCore.z));
       // Thicker bulge near the core, thin disc further out.
       float h = mix(1600.0, 320.0, smoothstep(0.0, 9000.0, r));
-      float profile = exp(-abs(p.y - uCore.y) / h);
+      float y = abs(p.y - uCore.y);
+      float profile = exp(-y / h) * (1.0 - smoothstep(0.5 * HALF_THICKNESS, HALF_THICKNESS, y));
       vec3 colour = mix(vec3(1.0, 0.80, 0.55), vec3(0.58, 0.70, 1.0), smoothstep(2500.0, 15000.0, r));
       // Fade out right next to the camera, where stars are resolved points.
       float near = smoothstep(${GLOW_NEAR_FADE[0].toFixed(1)}, ${GLOW_NEAR_FADE[1].toFixed(1)}, tt);

@@ -20,6 +20,7 @@ import {
   type Bookmark,
   type Carrier,
   type CarrierPlace,
+  type CommanderTrack,
   type CommanderPayload,
   type DataStatus,
   type FriendStatus,
@@ -35,7 +36,7 @@ import { CommanderLayer, SelectionMarker } from "./renderer/commander";
 import { SGR_A, SOL, edToWorld, worldToEd } from "./renderer/coords";
 import { FriendsLayer, type FriendMarker } from "./renderer/friends";
 import { GalaxyGlow } from "./renderer/glow";
-import { PinSet, type PinItem } from "./renderer/pins";
+import { PinSet, stackPins, type PinItem } from "./renderer/pins";
 import { PointCloud } from "./renderer/pointcloud";
 import type { PoiLayer } from "./renderer/poi";
 import { PlotLayer } from "./renderer/route";
@@ -69,8 +70,9 @@ const selection = new SelectionMarker();
 const plot = new PlotLayer();
 const friends = new FriendsLayer($("poi-labels"));
 const homePin = new PinSet("home", $("poi-labels"));
+const squadronPin = new PinSet("squadron", $("poi-labels"));
 const carrierPin = new PinSet<PinItem & { carrier: Carrier; place: CarrierPlace }>("carrier", $("poi-labels"));
-view.overlay.add(commander.object, selection.object, plot.object, friends.object, homePin.object, carrierPin.object);
+view.overlay.add(commander.object, selection.object, plot.object, friends.object, homePin.object, squadronPin.object, carrierPin.object);
 // Needs no data, so the sky is there from the first frame, setup included.
 const sky = new IntergalacticSky();
 view.sky.add(sky.mesh);
@@ -180,9 +182,11 @@ places.onStatus = () => settingsPanel.renderPoi();
 bookmarks.onChange = () => {
   renderBookmarkButtons();
   settingsPanel.renderBookmarks();
-  // The home pin marks whatever system is behind the Home button.
-  const home = bookmarks.get("home");
-  homePin.set(home ? [{ pos: home.pos, label: home.name }] : []);
+  // The home and squadron pins mark whatever systems are behind those buttons.
+  for (const [slot, pin] of [["home", homePin], ["squadron", squadronPin]] as const) {
+    const saved = bookmarks.get(slot);
+    pin.set(saved ? [{ pos: saved.pos, label: saved.name }] : []);
+  }
   view.wake();
 };
 
@@ -457,12 +461,29 @@ function carrierNow(c: Carrier): CarrierPlace | null {
 /** Pins the selected commander's carrier, and moves it again when a booked jump departs. */
 function showCarrier(): void {
   window.clearTimeout(carrierTimer);
-  const c = commanders?.commanders.find((t) => t.fid === selectedFid)?.carrier ?? null;
+  const track = commanders?.commanders.find((t) => t.fid === selectedFid);
+  const c = track?.carrier ?? null;
   const place = c ? carrierNow(c) : null;
   carrierPin.set(c && place?.pos ? [{ pos: place.pos, label: c.name ?? c.callsign ?? "Carrier", carrier: c, place }] : []);
+  if (track && c?.aboard && place) followCarrier(track, place);
   const wait = c?.jump ? Date.parse(c.jump.departure) - Date.now() : NaN;
   if (wait > 0) carrierTimer = window.setTimeout(showCarrier, Math.min(wait + 1000, 2 ** 31 - 1));
   view.wake();
+}
+
+/**
+ * Docked aboard your own carrier, you go where it goes. The journal only
+ * moves you when you ride it through a jump in game; when it jumps while
+ * you're logged off (or the game writes only a CarrierLocation) your last
+ * position would be left behind, so the carrier's move counts as yours.
+ */
+function followCarrier(track: CommanderTrack, place: CarrierPlace): void {
+  const last = track.jumps[track.jumps.length - 1];
+  if (!place.pos || !last || place.system === last.system || place.timestamp <= last.timestamp) return;
+  const jump: Jump = { timestamp: place.timestamp, kind: "CarrierLocation", system: place.system, id64: place.id64, pos: place.pos };
+  track.jumps.push(jump);
+  commander.addJump(jump);
+  updateLocation();
 }
 
 /** "GSV Name · ABC-123 · System · jumping to Elsewhere at 18:40" for the hover label. */
@@ -667,7 +688,7 @@ function setPoiHover(i: number | null): void {
   view.wake();
 }
 
-type PinHit = { kind: "you" | "carrier" | "home" | "friend"; index: number };
+type PinHit = { kind: "you" | "carrier" | "home" | "squadron" | "friend"; index: number };
 
 /** The pin under (x, y): they draw over everything, so they pick first. */
 function pickPin(x: number, y: number, radius: number): PinHit | null {
@@ -675,6 +696,7 @@ function pickPin(x: number, y: number, radius: number): PinHit | null {
   const sets = [
     ["you", commander.pin],
     ["carrier", carrierPin],
+    ["squadron", squadronPin],
     ["home", homePin],
   ] as const;
   for (const [kind, set] of sets) {
@@ -698,6 +720,8 @@ function describePin(hit: PinHit): string {
     }
     case "home":
       return ["Home", bookmarks.get("home")?.name].filter(Boolean).join(" · ");
+    case "squadron":
+      return ["Squadron capital", bookmarks.get("squadron")?.name].filter(Boolean).join(" · ");
     case "friend":
       return describeFriend(friends.friends[hit.index]);
   }
@@ -715,9 +739,10 @@ function selectPin(hit: PinHit): void {
       if (place.pos) void selectNamed(place.system, place.pos, place.id64);
       return;
     }
-    case "home": {
-      const home = bookmarks.system("home");
-      if (home) select(home, false);
+    case "home":
+    case "squadron": {
+      const system = bookmarks.system(hit.kind);
+      if (system) select(system, false);
       return;
     }
     case "friend":
@@ -857,9 +882,10 @@ view.onFrame((now, dt) => {
   plot.update(now);
   overlay.layer?.update(view.pixelRatio);
   places.layer?.update(view.camera, canvas.clientWidth, canvas.clientHeight, view.pixelRatio, !view.idle);
-  for (const pins of [friends, commander.pin, homePin, carrierPin]) {
-    pins.update(view.camera, canvas.clientWidth, canvas.clientHeight, !view.idle);
-  }
+  // You at the bottom of any stack, then your carrier, the bookmarks and friends.
+  const pinSets = [commander.pin, carrierPin, squadronPin, homePin, friends.pins];
+  stackPins(pinSets, view.camera, canvas.clientWidth, canvas.clientHeight);
+  for (const pins of pinSets) pins.update(view.camera, canvas.clientWidth, canvas.clientHeight, !view.idle);
   const stats = cloud?.stats() ?? null;
   if (stats && stats.failed > reportedTileFailures) {
     if (reportedTileFailures === 0) {

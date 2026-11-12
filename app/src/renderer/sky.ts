@@ -7,7 +7,11 @@
 // thins into voids. Small, faint ones are the most distant and lean red.
 // The Local Group is in its true places: Andromeda and Triangulum at
 // infinity in their real directions, and the Magellanic Clouds as objects in
-// the scene at their real distances, so they shift as the view flies.
+// the scene at their real distances, so they shift as the view flies. The
+// Clouds are discs with their real tilts: from wherever the camera is, each
+// is squashed along its line of nodes by how far it's tilted from there, and
+// its clumps and bar keep their places on the disc, so it turns as a solid
+// thing does when the view moves.
 //
 // Each galaxy is one instanced quad laid on the sky (a tangent plane at its
 // direction, so it keeps its orientation however the camera rolls), added
@@ -27,12 +31,8 @@
 
 import * as THREE from "three";
 import { SGR_A, edToWorld } from "./coords";
-
-// Must match glow.ts (the density map's extent and slab).
-const MAP_MIN_X = -50000;
-const MAP_MIN_Z = -25000;
-const MAP_SIZE = 100000;
-const HALF_THICKNESS = 4000;
+// The dust lies in the glow's slab, read from its density map.
+import { HALF_THICKNESS, MAP_MIN_X, MAP_MIN_Z, MAP_SIZE } from "./glow";
 
 /** Same seed, same sky, every run. */
 const SEED = 0x5ca1ab1e;
@@ -51,11 +51,14 @@ interface Galaxy {
   /** Unit direction at infinity, or (when `placed`) a world position in ly. */
   pos: THREE.Vector3;
   placed: boolean;
-  /** Major axis: any world vector off the sightline; it's projected onto the sky. */
+  /**
+   * On the sky: the major axis, any world vector off the sightline (it's
+   * projected onto the sky). Placed: the disc's normal.
+   */
   axis: THREE.Vector3;
   /** Scale radius: radians on the sky, or ly when placed. */
   scale: number;
-  /** Apparent minor/major axis ratio. */
+  /** On the sky: the apparent minor/major axis ratio. Placed: the disc's thickness, the least it looks seen edge on. */
   q: number;
   /** Surface brightness at the centre of the disc (linear HDR units). */
   sb: number;
@@ -384,21 +387,32 @@ function localGroup(): Galaxy[] {
   });
 
   // The Magellanic Clouds sit inside the map's range, so they're placed in
-  // the scene (Sol is the world origin) rather than at infinity.
+  // the scene (Sol is the world origin) rather than at infinity, as discs
+  // tilted `incl` from face on to Earth about a line of nodes at position
+  // angle `nodes`; `thick` is how thin they get edge on.
   const clouds = [
-    // LMC: 49.6 kpc, about 10° across from Earth, with its off-centre bar.
-    { ra: 80.894, dec: -69.756, pa: 170, kpc: 49.6, scale: 4300, q: 0.82, sb: 0.65, bar: 0.55, offset: 0.35 },
-    // SMC: 62.4 kpc, about 5° by 3°.
-    { ra: 13.187, dec: -72.829, pa: 45, kpc: 62.4, scale: 2300, q: 0.55, sb: 0.5, bar: 0.3, offset: -0.2 },
+    // LMC: 49.6 kpc (Pietrzyński 2019), about 10° across from Earth, tilted
+    // 26° about nodes at 154° (van der Marel & Kallivayalil 2014), with its
+    // off-centre bar.
+    { ra: 80.894, dec: -69.756, nodes: 154, incl: 26, kpc: 49.6, scale: 4300, thick: 0.3, sb: 0.65, bar: 0.55, offset: 0.35 },
+    // SMC: 62.4 kpc, about 5° by 3°, elongated and steeply tilted.
+    { ra: 13.187, dec: -72.829, nodes: 45, incl: 60, kpc: 62.4, scale: 2300, thick: 0.45, sb: 0.5, bar: 0.3, offset: -0.2 },
   ];
   for (const c of clouds) {
-    const place = skyPlace(c.ra, c.dec, c.pa);
+    const { dir, axis: nodes } = skyPlace(c.ra, c.dec, c.nodes);
+    // Face on to Earth, tipped about the line of nodes.
+    const normal = dir
+      .clone()
+      .negate()
+      .multiplyScalar(Math.cos(c.incl * DEG))
+      .addScaledVector(new THREE.Vector3().crossVectors(dir, nodes), Math.sin(c.incl * DEG))
+      .normalize();
     out.push({
-      pos: place.dir.multiplyScalar(c.kpc * LY_PER_KPC),
+      pos: dir.multiplyScalar(c.kpc * LY_PER_KPC),
       placed: true,
-      axis: place.axis,
+      axis: normal,
       scale: c.scale,
-      q: c.q,
+      q: c.thick,
       sb: c.sb,
       kind: IRREGULAR,
       disc: tint(IRREGULAR_DISC),
@@ -415,7 +429,7 @@ function localGroup(): Galaxy[] {
 
 const vertexShader = /* glsl */ `
   attribute vec4 aPos;     // direction (w = 0) or world position (w = 1)
-  attribute vec3 aAxis;    // major axis, projected onto the sky here
+  attribute vec3 aAxis;    // major axis, projected onto the sky here; a placed disc's normal
   attribute vec4 aShape;   // scale radius, axis ratio, surface brightness, kind
   attribute vec4 aDisc;    // disc colour, bulge share
   attribute vec4 aCore;    // core colour, seed
@@ -496,7 +510,16 @@ const vertexShader = /* glsl */ `
     float scale;
     float tMax = 1e9;
     float fade = 1.0;
-    if (aPos.w > 0.5) {
+    float q = aShape.y;
+    vec3 major;
+    vec3 minor;
+    // A placed disc's own axes, and where a step along the sky's minor axis
+    // lands on it.
+    vec3 e1 = vec3(0.0);
+    vec3 e2 = vec3(0.0);
+    vec3 across = vec3(0.0);
+    bool placed = aPos.w > 0.5;
+    if (placed) {
       vec3 rel = aPos.xyz - cameraPosition;
       float dist = length(rel);
       dir = rel / dist;
@@ -504,14 +527,26 @@ const vertexShader = /* glsl */ `
       tMax = dist;
       // Fly into a cloud and it thins away rather than filling the sky.
       fade = smoothstep(1.5, 4.0, dist / aShape.x);
+
+      // A tilted disc: squashed across its line of nodes by the cosine of
+      // the tilt from here, never thinner than the disc itself.
+      vec3 n = normalize(aAxis);
+      float cosi = dot(n, dir);
+      q = max(abs(cosi), aShape.y);
+      e1 = normalize(cross(n, abs(n.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+      e2 = cross(n, e1);
+      vec3 nodes = cross(n, dir);
+      // Face on, any axis will do: the pattern is pinned to e1 and e2.
+      major = dot(nodes, nodes) > 1e-8 ? normalize(nodes) : normalize(e1 - dir * dot(dir, e1));
+      minor = cross(dir, major);
+      across = minor - dir * (dot(minor, n) / (cosi < 0.0 ? -q : q));
     } else {
       dir = aPos.xyz;
       scale = aShape.x;
+      major = normalize(aAxis - dir * dot(dir, aAxis));
+      minor = cross(dir, major);
     }
-    vec3 major = normalize(aAxis - dir * dot(dir, aAxis));
-    vec3 minor = cross(dir, major);
 
-    float q = aShape.y;
     float kind = aShape.w;
     float aPx = scale / uPixelAngle;
     // Unresolved, the light is as concentrated as the galaxy's inner parts:
@@ -525,7 +560,13 @@ const vertexShader = /* glsl */ `
 
     vBlob = px / vec2(sMaj, sMin);
     vEdge = position.xy;
-    vDisc = vec2(px.x / aPx, px.y / (aPx * q));
+    if (placed) {
+      // Onto the disc, in its own axes, so the pattern stays put on it.
+      vec3 onDisc = (major * px.x + across * px.y) / aPx;
+      vDisc = vec2(dot(onDisc, e1), dot(onDisc, e2));
+    } else {
+      vDisc = vec2(px.x / aPx, px.y / (aPx * q));
+    }
     vShape = vec4(kind, smoothstep(1.5, 4.0, aPx), aCore.w, 0.7 / aPx);
     vDiscColour = aDisc;
     vCoreColour = aCore.rgb;

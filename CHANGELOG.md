@@ -23,25 +23,33 @@
   thousands of them, mostly unresolved smudges, gathered into clusters,
   groups and filaments, the faintest reddened by distance. Andromeda and
   Triangulum are in their true directions. The Magellanic Clouds sit at
-  their real distances, so they shift as you fly. The Milky Way's dust dims
-  whatever lies behind its disc. Layers → "Distant galaxies" (Shift+6)
-  turns it off.
+  their real distances as discs with their real tilts, so they shift and turn
+  like solid things as you fly. The Milky Way's dust dims whatever lies
+  behind its disc. Layers → "Distant galaxies" (Shift+6) turns it off.
 - **Your fleet carrier on the map.** The journals' carrier events (bought,
   stats, location at login, jumps booked and cancelled, riding it through a
   jump) place your own carrier as a peach pin labelled with its name; it moves
   when a booked jump departs, and hovering it says where it's jumping next.
   Squadron carriers are left out. It goes with Layers → Travel history.
+  Docked aboard it, you go where it goes: when it jumps while you're logged
+  off (or the game logs only its new location), your position moves with it
+  instead of staying where you last were.
 
 ### Changed
 - **Home and Squadron go where you choose.** They no longer point at fixed
   systems: Settings → Jump buttons sets and clears them. A button stays hidden
   until it has a system.
-- **Map markers.** You, your friends, your home system and your carrier are
-  LCARS block pins: a solid block in the system's colour (accent, ice, lilac,
-  peach) with a pictogram cut out of it, standing beside its star and pointing
-  at it. Hover a pin for what it is, click it to select the system. Megaships,
+- **Map markers.** You, your friends, your home system, your squadron
+  capital and your carrier are LCARS block pins: a solid block in the
+  system's colour (accent, ice, lilac, peach) with a pictogram cut out of it,
+  standing beside its star and pointing at it. Pins that would overlap stack
+  up instead of hiding each other, with you at the bottom. Hover a pin for
+  what it is, click it to select the system. Megaships,
   the expeditions' carriers (DSSA, OASIS, PIONEER) and carrier hubs are drawn
   as ships seen from above instead of squares and dots.
+- **The bulge has no hard top and bottom.** Seen side on, the glow's bulge
+  ended in a flat edge where the slab it's drawn in stops. The slab is
+  taller now and the light fades out before its edge.
 - **No more edge around the explored regions.** The galaxy glow stands for
   every system, while the stars show only the catalogued ones, which
   are nearly complete within about 1,000 ly of Sol and around 1% beyond

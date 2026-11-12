@@ -1,23 +1,30 @@
-// Pins for the commander's own markers: you, friends, home and your fleet
-// carrier. Each is an LCARS block (a solid colour with the logo's big
-// top-left corner, the pictogram cut out of it) standing up and to the right
-// of its star and pointing at it from its bottom-left corner, with a dot on
-// the star. Pins keep their size on screen (they mark places rather than show
-// how big anything is), draw over everything, and are few enough to pick and
-// label on the CPU.
+// Pins for the commander's own markers: you, friends, home, the squadron
+// capital and your fleet carrier. Each is an LCARS block (a solid colour with
+// the logo's big top-left corner, the pictogram cut out of it) standing up and
+// to the right of its star and pointing at it from its bottom-left corner,
+// with a dot on the star. Pins keep their size on screen (they mark places
+// rather than show how big anything is), draw over everything, and are few
+// enough to pick and label on the CPU.
+//
+// Pins that would overlap on screen stack instead (see `stackPins`): the
+// later ones sit on top of the first, a hairline apart, without tail or dot.
 
 import * as THREE from "three";
 import type { Vec3 } from "../api";
 import { edToWorld } from "./coords";
 import { projector } from "./pick";
 
-export type PinKind = "you" | "friend" | "home" | "carrier";
+export type PinKind = "you" | "friend" | "home" | "squadron" | "carrier";
 
-/** Design-system colours: accent, lcars-ice, lcars-lilac, lcars-peach. */
+/**
+ * Design-system colours: accent, lcars-ice, lcars-lilac, lcars-peach. Home and
+ * the squadron capital are both jump-button bookmarks, so they share lilac.
+ */
 export const PIN_COLOUR: Record<PinKind, string> = {
   you: "#ff9a2e",
   friend: "#8fb8ff",
   home: "#c9a3e6",
+  squadron: "#c9a3e6",
   carrier: "#ffc48c",
 };
 const VOID = "#03040a";
@@ -25,6 +32,10 @@ const VOID = "#03040a";
 // Drawing units are CSS pixels on the map. The block is 24 square, its
 // bottom-left tail ends at the anchor dot on the star.
 const BLOCK = "M2.6 29.4L6 21.4V9A9 9 0 0 1 15 0H28A2 2 0 0 1 30 2V22A2 2 0 0 1 28 24H8.6Z";
+/** The block on its own, for a pin stacked on another (no tail, no dot). */
+const STACKED_BLOCK = "M6 9A9 9 0 0 1 15 0H28A2 2 0 0 1 30 2V22A2 2 0 0 1 28 24H8A2 2 0 0 1 6 22Z";
+/** A stacked pin sits this far above the one below: the block and the space-hair gap. */
+const STEP = 26;
 const ANCHOR = { x: 1, y: 31.4 };
 /** The texture's extent in drawing units, with room for the dot and smoothing. */
 const BOX = { x: -1, y: -1, w: 32, h: 35 };
@@ -64,6 +75,13 @@ const GLYPHS: Record<PinKind, Glyph> = {
       c.fill(p);
     }
   },
+  // A squadron's shield with a chevron in it.
+  squadron: (c, fg, gap) => {
+    c.fillStyle = fg;
+    c.fill(new Path2D("M8 0.8L14.8 3.2V8C14.8 11.9 12 14.5 8 15.6C4 14.5 1.2 11.9 1.2 8V3.2Z"));
+    c.fillStyle = gap;
+    c.fill(new Path2D("M4.2 5.6L8 8.5L11.8 5.6V8.2L8 11.1L4.2 8.2Z"));
+  },
   // A house with a star in it.
   home: (c, fg, gap) => {
     c.fillStyle = fg;
@@ -82,11 +100,12 @@ const GLYPHS: Record<PinKind, Glyph> = {
   },
 };
 
-const textures = new Map<PinKind, THREE.Texture>();
+const textures = new Map<string, THREE.Texture>();
 
-/** The pin for `kind`, drawn once and shared. */
-export function pinTexture(kind: PinKind): THREE.Texture {
-  let t = textures.get(kind);
+/** The pin for `kind` (`stacked`: without its tail and dot), drawn once and shared. */
+export function pinTexture(kind: PinKind, stacked = false): THREE.Texture {
+  const key = stacked ? `${kind}-stacked` : kind;
+  let t = textures.get(key);
   if (t) return t;
   const canvas = document.createElement("canvas");
   canvas.width = BOX.w * TEXEL;
@@ -96,15 +115,19 @@ export function pinTexture(kind: PinKind): THREE.Texture {
   c.translate(-BOX.x, -BOX.y);
   const colour = PIN_COLOUR[kind];
   c.fillStyle = colour;
-  c.fill(new Path2D(BLOCK));
-  c.fill(circle(ANCHOR.x, ANCHOR.y, 1.7));
+  if (stacked) {
+    c.fill(new Path2D(STACKED_BLOCK));
+  } else {
+    c.fill(new Path2D(BLOCK));
+    c.fill(circle(ANCHOR.x, ANCHOR.y, 1.7));
+  }
   c.translate(11, 5);
   c.scale(0.875, 0.875);
   GLYPHS[kind](c, VOID, colour);
   t = new THREE.CanvasTexture(canvas);
   t.colorSpace = THREE.SRGBColorSpace;
   t.minFilter = THREE.LinearMipmapLinearFilter;
-  textures.set(kind, t);
+  textures.set(key, t);
   return t;
 }
 
@@ -122,7 +145,12 @@ export class PinSet<T extends PinItem = PinItem> {
   readonly object = new THREE.Group();
   items: T[] = [];
   private readonly material: THREE.SpriteMaterial;
+  private readonly stackedMaterial: THREE.SpriteMaterial;
   private readonly sprites: THREE.Sprite[] = [];
+  /** Each item's own star; a stacked pin's sprite sits on the stack's instead. */
+  private readonly anchors: THREE.Vector3[] = [];
+  /** How many pins each one sits above (0: on its own star). */
+  private readonly lifts: number[] = [];
   private readonly labelPool: HTMLDivElement[] = [];
   /** Labels need placing although the view hasn't moved (after `set`). */
   private dirty = false;
@@ -132,13 +160,16 @@ export class PinSet<T extends PinItem = PinItem> {
     /** Where labels go; none when null. */
     private readonly labelRoot: HTMLElement | null = null,
   ) {
-    this.material = new THREE.SpriteMaterial({
-      map: pinTexture(kind),
-      sizeAttenuation: false,
-      transparent: true,
-      depthTest: false,
-      depthWrite: false,
-    });
+    const material = (stacked: boolean) =>
+      new THREE.SpriteMaterial({
+        map: pinTexture(kind, stacked),
+        sizeAttenuation: false,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+      });
+    this.material = material(false);
+    this.stackedMaterial = material(true);
     this.object.name = `${kind}-pins`;
     // Over the route, the selection ring and the other markers.
     this.object.renderOrder = 2;
@@ -156,8 +187,26 @@ export class PinSet<T extends PinItem = PinItem> {
     }
     this.sprites.forEach((s, i) => {
       s.visible = i < items.length;
-      if (s.visible) edToWorld(items[i].pos, s.position);
+      if (!s.visible) return;
+      this.anchors[i] = edToWorld(items[i].pos, this.anchors[i]);
+      this.place(i, this.anchors[i], 0);
     });
+    this.dirty = true;
+  }
+
+  /** Item `i`'s own star. */
+  anchor(i: number): THREE.Vector3 {
+    return this.anchors[i];
+  }
+
+  /** Draws item `i` `lift` pins up from the pin on `base` (its own star when 0). */
+  place(i: number, base: THREE.Vector3, lift: number): void {
+    const s = this.sprites[i];
+    if (this.lifts[i] === lift && s.position.equals(base)) return;
+    this.lifts[i] = lift;
+    s.position.copy(base);
+    s.material = lift > 0 ? this.stackedMaterial : this.material;
+    s.center.set((ANCHOR.x - BOX.x) / BOX.w, 1 - (ANCHOR.y + lift * STEP - BOX.y) / BOX.h);
     this.dirty = true;
   }
 
@@ -183,10 +232,12 @@ export class PinSet<T extends PinItem = PinItem> {
       const p = this.sprites[i].position;
       const s = project(p.x, p.y, p.z);
       if (!s || s.depth >= bestDepth) continue;
+      const lift = this.lifts[i] ?? 0;
       const dx = x - s.sx;
-      const dy = y - s.sy;
+      const dy = y - s.sy + lift * STEP;
       const onBlock = dx >= HIT.left && dx <= HIT.right && dy >= HIT.top && dy <= HIT.bottom;
-      if (onBlock || dx * dx + dy * dy <= radius * radius) {
+      // Only the bottom pin of a stack has its dot on the star.
+      if (onBlock || (lift === 0 && dx * dx + dy * dy <= radius * radius)) {
         best = i;
         bestDepth = s.depth;
       }
@@ -218,7 +269,8 @@ export class PinSet<T extends PinItem = PinItem> {
       if (!s || s.sx < -40 || s.sy < 0 || s.sx > width || s.sy > height + 32) continue;
       const el = this.label(used++);
       if (el.textContent !== text) el.textContent = text;
-      el.style.transform = `translate(${(s.sx + LABEL_DX).toFixed(1)}px, ${(s.sy + LABEL_DY - LABEL_FONT_PX * 0.75).toFixed(1)}px)`;
+      const y = s.sy + LABEL_DY - LABEL_FONT_PX * 0.75 - (this.lifts[i] ?? 0) * STEP;
+      el.style.transform = `translate(${(s.sx + LABEL_DX).toFixed(1)}px, ${y.toFixed(1)}px)`;
       el.hidden = false;
     }
     for (let k = used; k < this.labelPool.length; k++) this.labelPool[k].hidden = true;
@@ -237,5 +289,31 @@ export class PinSet<T extends PinItem = PinItem> {
       this.labelPool.push(el);
     }
     return el;
+  }
+}
+
+/**
+ * Keeps pins from hiding one another. Taking the sets in order (the first
+ * goes to the bottom), a pin whose block would overlap one already placed
+ * goes on top of that one's stack instead, a hairline above; only the bottom
+ * pin of a stack keeps its tail and its dot on the star. Call every frame,
+ * before the sets' `update`.
+ */
+export function stackPins(sets: readonly PinSet[], camera: THREE.PerspectiveCamera, width: number, height: number): void {
+  const project = projector(camera, width, height);
+  const stacks: { sx: number; sy: number; base: THREE.Vector3; size: number }[] = [];
+  for (const set of sets) {
+    const shown = set.visible;
+    for (let i = 0; i < set.items.length; i++) {
+      const own = set.anchor(i);
+      const s = shown ? project(own.x, own.y, own.z) : null;
+      const stack = s && stacks.find((t) => Math.abs(s.sx - t.sx) < HIT.right - HIT.left && Math.abs(s.sy - t.sy) < STEP);
+      if (stack) {
+        set.place(i, stack.base, stack.size++);
+      } else {
+        set.place(i, own, 0);
+        if (s) stacks.push({ sx: s.sx, sy: s.sy, base: own, size: 1 });
+      }
+    }
   }
 }

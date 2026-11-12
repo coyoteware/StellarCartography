@@ -18,7 +18,8 @@ export interface FriendMarker {
 }
 
 export class FriendsLayer {
-  private readonly pins: PinSet<FriendMarker & { label: string }>;
+  /** The friends' pins, for stacking with the others (see `stackPins`). */
+  readonly pins: PinSet<FriendMarker & { label: string }>;
 
   constructor(labelRoot: HTMLElement) {
     this.pins = new PinSet("friend", labelRoot);

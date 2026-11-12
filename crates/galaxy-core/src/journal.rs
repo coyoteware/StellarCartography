@@ -4,7 +4,7 @@
 //! per line) to `%USERPROFILE%\Saved Games\Frontier Developments\Elite Dangerous`.
 //! Only the events that carry a position (`FSDJump`, `CarrierJump`, `Location`),
 //! the ones that say which commander is playing (`Commander`, `LoadGame`),
-//! `Docked` and `ApproachSettlement` are read, and the owner's fleet-carrier
+//! `Docked`, `Undocked` and `ApproachSettlement` are read, and the owner's fleet-carrier
 //! events (`CarrierBuy`, `CarrierStats`, `CarrierLocation`,
 //! `CarrierJumpRequest`, `CarrierJumpCancelled`). The arrival, docking and
 //! approach events also describe the system and station (factions,
@@ -40,6 +40,7 @@ pub enum Event {
     /// station the ship is docked at, when the event says so.
     Jump { jump: Jump, docked_at: Option<u64> },
     Docked { timestamp: String, id64: u64, market_id: u64 },
+    Undocked,
     /// Approaching a planetary port or settlement.
     ApproachSettlement { timestamp: String, id64: u64, market_id: u64 },
     /// The current ship's modules; the line is kept whole and parsed on
@@ -78,6 +79,11 @@ pub struct Carrier {
     pub at: Option<CarrierPlace>,
     /// A jump booked since: from `departure` on it's at the destination.
     pub jump: Option<CarrierJump>,
+    /// The commander is docked aboard it, as of their latest event, so they
+    /// go where it goes. The journal only says so when they ride it through
+    /// a jump (`CarrierJump`); when it moves while they're logged off, or
+    /// with only a `CarrierLocation` written, their position isn't updated.
+    pub aboard: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -226,6 +232,23 @@ pub struct CommanderTrack {
     /// Their own fleet carrier, when the journals mention one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub carrier: Option<Carrier>,
+    /// The MarketID of the station they're docked at, as of their latest event.
+    #[serde(skip)]
+    docked_at: Option<u64>,
+}
+
+impl CommanderTrack {
+    /// Docked at `market_id` (`None`: not docked), and so aboard their carrier or not.
+    fn set_docked(&mut self, market_id: Option<u64>) {
+        self.docked_at = market_id;
+        self.sync_aboard();
+    }
+
+    fn sync_aboard(&mut self) {
+        if let Some(c) = self.carrier.as_mut() {
+            c.aboard = self.docked_at == Some(c.id);
+        }
+    }
 }
 
 /// Travel history for every commander found in the journals, keyed by FID.
@@ -287,13 +310,14 @@ struct RawEvent {
     location: Option<String>,
 }
 
-const INTERESTING: [&str; 16] = [
+const INTERESTING: [&str; 17] = [
     "\"FSDJump\"",
     "\"CarrierJump\"",
     "\"Location\"",
     "\"Commander\"",
     "\"LoadGame\"",
     "\"Docked\"",
+    "\"Undocked\"",
     "\"ApproachSettlement\"",
     "\"Loadout\"",
     "\"Friends\"",
@@ -331,6 +355,7 @@ pub fn parse_line(line: &str) -> Option<Event> {
             id64: raw.system_address?,
             market_id: raw.market_id?,
         }),
+        "Undocked" => Some(Event::Undocked),
         "ApproachSettlement" => Some(Event::ApproachSettlement {
             timestamp: raw.timestamp.unwrap_or_default(),
             id64: raw.system_address?,
@@ -521,6 +546,8 @@ impl Reader {
                             pos: Some(jump.pos),
                         });
                     }
+                    // An arrival in space (or a login there) isn't docked anywhere.
+                    track.set_docked(docked_at);
                     let repeat = jump.kind == "Location"
                         && track.jumps.last().is_some_and(|last| last.system == jump.system);
                     if !repeat {
@@ -530,6 +557,14 @@ impl Reader {
                 }
                 Some(Event::Docked { timestamp, id64, market_id }) => {
                     self.snapshots.record_station(StationEvent::Docked, market_id, id64, &timestamp, line);
+                    if let Some(track) = self.current_fid.as_ref().and_then(|fid| self.history.commanders.get_mut(fid)) {
+                        track.set_docked(Some(market_id));
+                    }
+                }
+                Some(Event::Undocked) => {
+                    if let Some(track) = self.current_fid.as_ref().and_then(|fid| self.history.commanders.get_mut(fid)) {
+                        track.set_docked(None);
+                    }
                 }
                 Some(Event::ApproachSettlement { timestamp, id64, market_id }) => {
                     self.snapshots.record_station(StationEvent::Approach, market_id, id64, &timestamp, line);
@@ -562,6 +597,7 @@ impl Reader {
                         *carrier = Carrier { id, ..Carrier::default() };
                     }
                     carrier.apply(&timestamp, update);
+                    track.sync_aboard();
                 }
                 None => {}
             }
@@ -697,6 +733,52 @@ mod tests {
         assert_eq!((at.system.as_str(), at.pos), ("Colonia", Some([-9530.5, -910.28125, 19808.125])));
         assert_eq!(carrier.jump, None);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn you_go_where_your_carrier_goes_while_docked_aboard() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Journal.2026-10-01T180000.01.log");
+        let mut f = File::create(&path).unwrap();
+        writeln!(f, "{COMMANDER}
+{LOCATION}
+{CARRIER_BUY}
+{CARRIER_STATS}").unwrap();
+        f.flush().unwrap();
+        let mut source = JournalSource::new(dir.path().to_path_buf());
+        let aboard = |source: &mut JournalSource| source.history().unwrap().commanders["F1234"].carrier.as_ref().unwrap().aboard;
+        assert!(!aboard(&mut source), "docked at a station, not the carrier");
+
+        // Riding it through a jump: aboard.
+        writeln!(f, "{OWN_CARRIER_JUMP}").unwrap();
+        f.flush().unwrap();
+        source.poll().unwrap();
+        assert!(aboard(&mut source));
+
+        // It moves on with only a CarrierLocation (the commander logged off
+        // aboard): the carrier is there, and the commander still with it.
+        let moved = r#"{ "timestamp":"2026-10-02T09:00:00Z", "event":"CarrierLocation", "CarrierType":"FleetCarrier", "CarrierID":3708098048, "StarSystem":"Sagittarius A*", "SystemAddress":20578934, "BodyID":0 }"#;
+        writeln!(f, "{moved}").unwrap();
+        f.flush().unwrap();
+        source.poll().unwrap();
+        let carrier = source.history().unwrap().commanders["F1234"].carrier.clone().unwrap();
+        assert_eq!(carrier.at.map(|p| p.system), Some("Sagittarius A*".into()));
+        assert!(carrier.aboard);
+
+        let undocked = r#"{ "timestamp":"2026-10-02T09:05:00Z", "event":"Undocked", "StationName":"W3H-NVZ", "StationType":"FleetCarrier", "MarketID":3708098048 }"#;
+        let redocked = r#"{ "timestamp":"2026-10-02T09:06:00Z", "event":"Docked", "StationName":"W3H-NVZ", "StationType":"FleetCarrier", "StarSystem":"Sagittarius A*", "SystemAddress":20578934, "MarketID":3708098048 }"#;
+        writeln!(f, "{undocked}").unwrap();
+        f.flush().unwrap();
+        source.poll().unwrap();
+        assert!(!aboard(&mut source), "undocked");
+        writeln!(f, "{redocked}").unwrap();
+        f.flush().unwrap();
+        source.poll().unwrap();
+        assert!(aboard(&mut source), "docked on it again");
+        writeln!(f, "{}", FSDJUMP.replace("2026-10-01T18:10:00Z", "2026-10-02T09:30:00Z")).unwrap();
+        f.flush().unwrap();
+        source.poll().unwrap();
+        assert!(!aboard(&mut source), "jumped away in a ship");
     }
 
     #[test]

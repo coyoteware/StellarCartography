@@ -181,7 +181,8 @@ Settings → System details switches the online source, or turns lookups off
 Home and Squadron, under the search box (keys 4 and 5), fly to systems you
 choose in Settings → Jump buttons: type a name and pick it from the list. Each
 button shows once it has a system; Clear hides it again. The choice is saved
-in settings.json under `homeSystem` and `squadronSystem`.
+in settings.json under `homeSystem` and `squadronSystem`. Both systems get a
+lilac pin on the map (a house for home, a shield for the squadron).
 
 ## Build the galaxy data from the command line
 

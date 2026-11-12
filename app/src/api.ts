@@ -121,7 +121,8 @@ export interface SystemInfo {
 
 export interface Jump {
   timestamp: string;
-  kind: "FSDJump" | "CarrierJump" | "Location";
+  /** The journal event, or "CarrierLocation" for a move made aboard your carrier that the journal didn't record (main.ts). */
+  kind: "FSDJump" | "CarrierJump" | "Location" | "CarrierLocation";
   system: string;
   id64: string | null;
   pos: Vec3;
@@ -152,6 +153,8 @@ export interface Carrier {
   at: CarrierPlace | null;
   /** A jump booked since: from `departure` (ISO, UTC) on it's at `to`. */
   jump: { timestamp: string; departure: string; to: CarrierPlace } | null;
+  /** The commander is docked aboard it, as of their latest journal event, so goes where it goes. */
+  aboard: boolean;
 }
 
 export interface CommanderPayload {
