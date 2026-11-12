@@ -8,30 +8,40 @@ import {
   buildStatus,
   commanderHistory,
   datasetInfo,
+  friendPositions,
   getSettings,
   getSystem,
+  onCommanderCarrier,
   onCommanderJump,
   saveKeys,
   saveViewSettings,
   searchSystems,
   visitedSystems,
+  type Bookmark,
+  type Carrier,
+  type CarrierPlace,
   type CommanderPayload,
   type DataStatus,
+  type FriendStatus,
   type Jump,
   type SystemInfo,
+  type Vec3,
   type ViewSettings,
   type VisitedSystem,
 } from "./api";
 import { Bindings, Keyboard, chordLabel, loadLayout } from "./keys";
 import type { Poi } from "./poi";
-import { Backdrop } from "./renderer/backdrop";
 import { CommanderLayer, SelectionMarker } from "./renderer/commander";
 import { SGR_A, SOL, edToWorld, worldToEd } from "./renderer/coords";
+import { FriendsLayer, type FriendMarker } from "./renderer/friends";
 import { GalaxyGlow } from "./renderer/glow";
+import { PinSet, type PinItem } from "./renderer/pins";
 import { PointCloud } from "./renderer/pointcloud";
 import type { PoiLayer } from "./renderer/poi";
 import { PlotLayer } from "./renderer/route";
+import { IntergalacticSky } from "./renderer/sky";
 import { View } from "./renderer/view";
+import { BOOKMARKS, BOOKMARK_NAMES, Bookmarks } from "./ui/bookmarks";
 import { CatalogueUi } from "./ui/catalogue";
 import { Hud } from "./ui/hud";
 import { SystemPanel } from "./ui/details";
@@ -53,13 +63,17 @@ const view = new View($("viewport"));
 const hud = new Hud($("hud"));
 const toasts = new Toasts($("toasts"));
 const catalogue = new CatalogueUi(toasts);
+const bookmarks = new Bookmarks(toasts);
 const commander = new CommanderLayer();
 const selection = new SelectionMarker();
 const plot = new PlotLayer();
-view.overlay.add(commander.object, selection.object, plot.object);
+const friends = new FriendsLayer($("poi-labels"));
+const homePin = new PinSet("home", $("poi-labels"));
+const carrierPin = new PinSet<PinItem & { carrier: Carrier; place: CarrierPlace }>("carrier", $("poi-labels"));
+view.overlay.add(commander.object, selection.object, plot.object, friends.object, homePin.object, carrierPin.object);
 // Needs no data, so the sky is there from the first frame, setup included.
-const backdrop = new Backdrop();
-view.scene.add(backdrop.mesh);
+const sky = new IntergalacticSky();
+view.sky.add(sky.mesh);
 
 let cloud: PointCloud | null = null;
 let glow: GalaxyGlow | null = null;
@@ -78,7 +92,8 @@ let viewSettings: ViewSettings = {
   highlights: {},
   poi: true,
   poiHidden: ["planetaryNebula"],
-  backdrop: true,
+  friends: true,
+  sky: true,
 };
 let reportedTileFailures = 0;
 /**
@@ -144,6 +159,7 @@ const places = new PlacesUi({
 
 const settingsPanel = new SettingsPanel({
   toasts,
+  bookmarks,
   view: () => viewSettings,
   onView: (v) => applyView(v),
   onRebuild: () => catalogue.rebuild(),
@@ -156,9 +172,19 @@ const settingsPanel = new SettingsPanel({
   onPoiUpdate: () => void places.startUpdate(),
   onReminders: (on) => (updateReminders = on),
   onKeys: () => keysCard.open(),
+  friends: () => friendStatuses,
+  onFriends: () => void refreshFriends(),
 });
 overlay.onStatus = () => settingsPanel.renderPopulated();
 places.onStatus = () => settingsPanel.renderPoi();
+bookmarks.onChange = () => {
+  renderBookmarkButtons();
+  settingsPanel.renderBookmarks();
+  // The home pin marks whatever system is behind the Home button.
+  const home = bookmarks.get("home");
+  homePin.set(home ? [{ pos: home.pos, label: home.name }] : []);
+  view.wake();
+};
 
 const routeUi = new RouteUi({
   toasts,
@@ -194,13 +220,6 @@ const openSettings = { label: "Settings", run: () => void settingsPanel.open() }
 const showGalaxy = () => view.lookAt(edToWorld(SGR_A), 95_000, new THREE.Vector3(0, 0.8, 0.6));
 const showSol = () => view.flyTo(edToWorld(SOL), 120);
 
-/**
- * Systems with their own jump-to button, as the catalogue has them. No rowid:
- * rebuilds renumber the rows, and the details only need the id64.
- */
-const HOME: SystemInfo = { rowid: null, id64: "2558223422178", name: "Synuefe GN-I c26-9", pos: [278.5625, -59.3125, 71.46875] };
-const SQUADRON_CAPITAL: SystemInfo = { rowid: null, id64: "869521148275", name: "HIP 49987", pos: [252.59375, -46.09375, 87.6875] };
-
 // --- View settings -----------------------------------------------------------
 
 let saveTimer = 0;
@@ -210,7 +229,7 @@ function applyDimming(): void {
   const dim = overlay.active;
   if (cloud) cloud.gain = dim ? 0.35 : 1;
   if (glow) glow.brightness = dim ? 0.45 : 1;
-  backdrop.brightness = dim ? 0.45 : 1;
+  sky.brightness = dim ? 0.45 : 1;
 }
 
 /** Applies display preferences to the scene and (debounced) saves them. */
@@ -222,15 +241,19 @@ function applyView(next: ViewSettings, persist = true): void {
     cloud.object.visible = next.stars;
   }
   if (glow) glow.mesh.visible = next.glow;
-  backdrop.mesh.visible = next.backdrop;
+  sky.mesh.visible = next.sky;
+  // Your carrier is journal data like your route, so it goes with it.
   commander.object.visible = next.route;
+  carrierPin.visible = next.route;
   plot.object.visible = next.plot;
+  friends.visible = next.friends;
   $<HTMLInputElement>("layer-glow").checked = next.glow;
   $<HTMLInputElement>("layer-stars").checked = next.stars;
   $<HTMLInputElement>("layer-route").checked = next.route;
   $<HTMLInputElement>("layer-plot").checked = next.plot;
   $<HTMLInputElement>("layer-poi").checked = next.poi;
-  $<HTMLInputElement>("layer-backdrop").checked = next.backdrop;
+  $<HTMLInputElement>("layer-friends").checked = next.friends;
+  $<HTMLInputElement>("layer-sky").checked = next.sky;
   overlay.sync();
   places.sync();
   applyDimming();
@@ -286,14 +309,14 @@ async function loadGalaxy(status: Extract<DataStatus, { state: "ready" }>): Prom
   const [c, g] = await Promise.allSettled([PointCloud.load(), GalaxyGlow.load()]);
   if (c.status === "fulfilled") {
     cloud = c.value;
-    view.scene.add(cloud.object);
+    view.stars.add(cloud.object);
   } else {
     toasts.error(`Couldn't load the star tiles: ${errorText(c.reason)}`, { action: openSettings });
   }
   if (g.status === "fulfilled") {
     glow = g.value;
-    view.scene.add(glow.mesh);
-    backdrop.setDust(glow.density);
+    view.backdrop.add(glow.mesh);
+    sky.setDust(glow.density);
   } else {
     toasts.error(`Couldn't load the galaxy glow: ${errorText(g.reason)}`, { action: openSettings });
   }
@@ -317,6 +340,7 @@ function setCommander(fid: string): void {
   selectedFid = fid;
   commander.setTrack(track);
   updateLocation();
+  showCarrier();
   view.wake();
 }
 
@@ -412,6 +436,97 @@ async function loadCommander(): Promise<void> {
       view.wake();
     }
   });
+  await onCommanderCarrier((fid, carrier) => {
+    const track = commanders?.commanders.find((c) => c.fid === fid);
+    if (!track) return;
+    track.carrier = carrier;
+    if (fid === selectedFid) showCarrier();
+  });
+}
+
+// --- Your carrier ----------------------------------------------------------------
+
+let carrierTimer = 0;
+
+/** Where a carrier is now: at a booked jump's destination once it has departed. */
+function carrierNow(c: Carrier): CarrierPlace | null {
+  if (c.jump && Date.parse(c.jump.departure) <= Date.now()) return c.jump.to;
+  return c.at;
+}
+
+/** Pins the selected commander's carrier, and moves it again when a booked jump departs. */
+function showCarrier(): void {
+  window.clearTimeout(carrierTimer);
+  const c = commanders?.commanders.find((t) => t.fid === selectedFid)?.carrier ?? null;
+  const place = c ? carrierNow(c) : null;
+  carrierPin.set(c && place?.pos ? [{ pos: place.pos, label: c.name ?? c.callsign ?? "Carrier", carrier: c, place }] : []);
+  const wait = c?.jump ? Date.parse(c.jump.departure) - Date.now() : NaN;
+  if (wait > 0) carrierTimer = window.setTimeout(showCarrier, Math.min(wait + 1000, 2 ** 31 - 1));
+  view.wake();
+}
+
+/** "GSV Name · ABC-123 · System · jumping to Elsewhere at 18:40" for the hover label. */
+function describeCarrier(c: Carrier, place: CarrierPlace): string {
+  const parts = [c.name, c.callsign, place.system].filter((s): s is string => !!s);
+  const jump = c.jump;
+  if (jump && Date.parse(jump.departure) > Date.now()) {
+    const at = new Date(jump.departure).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    parts.push(`jumping to ${jump.to.system} at ${at}`);
+  }
+  return parts.join(" · ");
+}
+
+// --- Friends -------------------------------------------------------------------
+
+/** How often friends' EDSM positions are re-fetched. */
+const FRIEND_POLL_MS = 5 * 60_000;
+/** The latest lookup per friend, for the settings panel's status lines. */
+let friendStatuses: FriendStatus[] = [];
+
+/** Fetches every friend's last known position and places the markers. */
+async function refreshFriends(refresh = false): Promise<void> {
+  try {
+    friendStatuses = await friendPositions(refresh);
+  } catch (e) {
+    console.error("friend positions:", e);
+    return;
+  }
+  const markers: FriendMarker[] = [];
+  for (const f of friendStatuses) {
+    const p = f.position;
+    if (!p?.system) continue;
+    let pos = p.pos;
+    if (!pos) {
+      // EDSM knows the system but not its coordinates: try the catalogue.
+      const name = p.system.toLowerCase();
+      const found = await searchSystems(p.system).catch(() => []);
+      pos = found.find((s) => s.name.toLowerCase() === name)?.pos ?? null;
+    }
+    if (pos) markers.push({ name: p.name, system: p.system, pos, date: p.date, dockedAt: p.dockedAt, ship: p.ship });
+  }
+  friends.set(markers);
+  settingsPanel.renderFriends();
+  view.wake();
+}
+
+/** Selects a system by name (its catalogue entry when it has one), e.g. a pin's. */
+async function selectNamed(name: string, pos: Vec3, id64: string | null = null): Promise<void> {
+  const mine = ++selectionSeq;
+  const found = await searchSystems(name).catch(() => []);
+  if (mine !== selectionSeq) return;
+  const match = found.find((s) => s.name.toLowerCase() === name.toLowerCase());
+  select(match ?? { rowid: null, id64, name, pos }, false);
+}
+
+const selectFriend = (f: FriendMarker) => selectNamed(f.system, f.pos);
+
+/** "CMDR Name · System · docked at X · seen 2026-11-09 18:00" for the hover label. */
+function describeFriend(f: FriendMarker): string {
+  const parts = [`CMDR ${f.name}`, f.system];
+  if (f.dockedAt) parts.push(`docked at ${f.dockedAt}`);
+  if (f.ship) parts.push(f.ship);
+  if (f.date) parts.push(`seen ${f.date}`);
+  return parts.join(" · ");
 }
 
 // --- UI wiring ---------------------------------------------------------------
@@ -431,15 +546,35 @@ const goCommander = () => {
 };
 // These sit among thousands of neighbours, so they're selected (marker and
 // details) as well as flown to.
-const goHome = () => select(HOME, true);
-const goSquadron = () => select(SQUADRON_CAPITAL, true);
+const goBookmark = (slot: Bookmark) => {
+  const system = bookmarks.system(slot);
+  if (system) return select(system, true);
+  // The button only shows once there is one; the key is always there.
+  toasts.show(`There's no ${BOOKMARK_NAMES[slot]} yet. Choose one in Settings → Jump buttons.`, "info", {
+    timeout: 6,
+    action: openSettings,
+  });
+};
+const goHome = () => goBookmark("home");
+const goSquadron = () => goBookmark("squadron");
+
+/** Shows the jump buttons that have a system behind them, named in their tooltips. */
+function renderBookmarkButtons(): void {
+  for (const slot of BOOKMARKS) {
+    const system = bookmarks.get(slot);
+    const button = $(`go-${slot}`);
+    button.hidden = !system;
+    button.title = system ? `${system.name}, your ${BOOKMARK_NAMES[slot]}` : "";
+  }
+  $("bookmark-buttons").hidden = BOOKMARKS.every((slot) => !bookmarks.get(slot));
+}
 $("go-sol").addEventListener("click", showSol);
 $("go-galaxy").addEventListener("click", goGalaxy);
 $("go-cmdr").addEventListener("click", goCommander);
 $("go-home").addEventListener("click", goHome);
 $("go-squadron").addEventListener("click", goSquadron);
 $("open-settings").addEventListener("click", () => void settingsPanel.open());
-for (const layer of ["glow", "stars", "route", "plot", "poi", "backdrop"] as const) {
+for (const layer of ["glow", "stars", "route", "plot", "poi", "friends", "sky"] as const) {
   $<HTMLInputElement>(`layer-${layer}`).addEventListener("change", (e) =>
     applyView({ ...viewSettings, [layer]: (e.target as HTMLInputElement).checked }),
   );
@@ -466,7 +601,7 @@ for (const [id, layer] of [
   ["toggleRoute", "route"],
   ["togglePoi", "poi"],
   ["togglePlot", "plot"],
-  ["toggleBackdrop", "backdrop"],
+  ["toggleSky", "sky"],
 ] as const) {
   keyboard.on(id, () => applyView({ ...viewSettings, [layer]: !viewSettings[layer] }));
 }
@@ -532,6 +667,64 @@ function setPoiHover(i: number | null): void {
   view.wake();
 }
 
+type PinHit = { kind: "you" | "carrier" | "home" | "friend"; index: number };
+
+/** The pin under (x, y): they draw over everything, so they pick first. */
+function pickPin(x: number, y: number, radius: number): PinHit | null {
+  const [w, h] = [canvas.clientWidth, canvas.clientHeight];
+  const sets = [
+    ["you", commander.pin],
+    ["carrier", carrierPin],
+    ["home", homePin],
+  ] as const;
+  for (const [kind, set] of sets) {
+    const index = set.pick(view.camera, w, h, x, y, radius);
+    if (index !== null) return { kind, index };
+  }
+  const index = friends.pick(view.camera, w, h, x, y, radius);
+  return index === null ? null : { kind: "friend", index };
+}
+
+function describePin(hit: PinHit): string {
+  switch (hit.kind) {
+    case "you": {
+      const cur = commander.current();
+      const name = commanders?.commanders.find((c) => c.fid === selectedFid)?.name;
+      return [name ? `CMDR ${name}` : "You", cur?.system].filter(Boolean).join(" · ");
+    }
+    case "carrier": {
+      const item = carrierPin.items[hit.index];
+      return describeCarrier(item.carrier, item.place);
+    }
+    case "home":
+      return ["Home", bookmarks.get("home")?.name].filter(Boolean).join(" · ");
+    case "friend":
+      return describeFriend(friends.friends[hit.index]);
+  }
+}
+
+function selectPin(hit: PinHit): void {
+  switch (hit.kind) {
+    case "you": {
+      const cur = commander.current();
+      if (cur) void selectNamed(cur.system, cur.pos, cur.id64);
+      return;
+    }
+    case "carrier": {
+      const { place } = carrierPin.items[hit.index];
+      if (place.pos) void selectNamed(place.system, place.pos, place.id64);
+      return;
+    }
+    case "home": {
+      const home = bookmarks.system("home");
+      if (home) select(home, false);
+      return;
+    }
+    case "friend":
+      return void selectFriend(friends.friends[hit.index]);
+  }
+}
+
 /** The point-of-interest marker under (x, y), when they're drawn. */
 function pickPoi(x: number, y: number, radius: number): Poi | null {
   const layer = places.layer;
@@ -550,7 +743,19 @@ function hover(): void {
   hoverTimer = 0;
   if (!hoverAt) return;
   const { x, y } = hoverAt;
-  // Markers first, then coloured dots: they're what those layers are about.
+  // Pins draw on top of everything, so they pick first.
+  const pin = pickPin(x, y, 5);
+  if (pin !== null) {
+    hoverRowid = -1;
+    setPoiHover(null);
+    canvas.style.cursor = "pointer";
+    hoverLabel.style.left = `${x}px`;
+    hoverLabel.style.top = `${y}px`;
+    hoverLabel.textContent = describePin(pin);
+    hoverLabel.hidden = false;
+    return;
+  }
+  // Markers next, then coloured dots: they're what those layers are about.
   const poi = pickPoi(x, y, 5);
   if (poi && places.layer) {
     hoverRowid = -1;
@@ -612,6 +817,8 @@ canvas.addEventListener("pointerdown", (e) => {
 canvas.addEventListener("pointerup", async (e) => {
   if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return;
   const { x, y } = canvasPoint(e);
+  const pin = pickPin(x, y, 6);
+  if (pin !== null) return selectPin(pin);
   const poi = pickPoi(x, y, 6);
   if (poi) return void selectPoi(poi, false);
   const dot = pickOverlay(x, y, 6);
@@ -650,6 +857,9 @@ view.onFrame((now, dt) => {
   plot.update(now);
   overlay.layer?.update(view.pixelRatio);
   places.layer?.update(view.camera, canvas.clientWidth, canvas.clientHeight, view.pixelRatio, !view.idle);
+  for (const pins of [friends, commander.pin, homePin, carrierPin]) {
+    pins.update(view.camera, canvas.clientWidth, canvas.clientHeight, !view.idle);
+  }
   const stats = cloud?.stats() ?? null;
   if (stats && stats.failed > reportedTileFailures) {
     if (reportedTileFailures === 0) {
@@ -676,6 +886,8 @@ if (import.meta.env.DEV) {
     sc: {
       view,
       commander,
+      friends,
+      refreshFriends,
       catalogue,
       overlay,
       places,
@@ -691,7 +903,7 @@ if (import.meta.env.DEV) {
       get glow() {
         return glow;
       },
-      backdrop,
+      sky,
       THREE,
       edToWorld,
     },
@@ -705,6 +917,7 @@ async function boot(): Promise<void> {
     updateReminders = settings.updateReminders;
     keyboard.use(new Bindings(settings.keys ?? {}));
     updateHelp();
+    bookmarks.load(settings);
   } catch (e) {
     toasts.error(`Couldn't read the settings: ${errorText(e)}`);
   }
@@ -731,6 +944,8 @@ async function boot(): Promise<void> {
   }
   // After the commander, so the saved route and ship know who's flying.
   void routeUi.load();
+  void refreshFriends();
+  window.setInterval(() => void refreshFriends(), FRIEND_POLL_MS);
   await galaxy;
 }
 

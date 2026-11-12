@@ -11,6 +11,7 @@
 //! cargo run --release -p ingest -- --input dump.json.gz --out data
 //! cargo run --release -p ingest -- --populated --out data          # overlay layers
 //! cargo run --release -p ingest -- --poi --out data                # points of interest
+//! cargo run --release -p ingest -- --maps --out data               # redraw the density maps only
 //! ```
 
 use std::path::PathBuf;
@@ -34,6 +35,10 @@ struct Args {
     /// edsmPOI.csv, fleetcarriers.csv, codex-data.csv).
     #[arg(long, conflicts_with_all = ["populated", "tee", "sphere", "url", "limit"])]
     poi: bool,
+    /// Redraw density.png and coverage.png from the galaxy.sqlite already in
+    /// --out, without downloading anything.
+    #[arg(long, conflicts_with_all = ["populated", "poi", "input", "tee", "sphere", "url", "limit"])]
+    maps: bool,
     /// Read a local copy of the dump instead of streaming it.
     #[arg(long, conflicts_with = "url")]
     input: Option<PathBuf>,
@@ -61,6 +66,14 @@ fn main() -> Result<()> {
     }
     if args.poi {
         return build_poi(args);
+    }
+    if args.maps {
+        let s = ingest::rebuild_maps(&args.out)?;
+        eprintln!(
+            "done: density maps redrawn from {} systems ({:.0}s reading galaxy.sqlite, {:.0}s drawing)",
+            s.systems, s.seconds_read, s.seconds_draw
+        );
+        return Ok(());
     }
     let opts = Options {
         input: match args.input {

@@ -1,5 +1,5 @@
 import { searchSystems, type SystemInfo } from "../api";
-import { categoryInfo, glyph, type Poi } from "../poi";
+import { glyph, poiShape, type Poi } from "../poi";
 import { describePoi } from "./places";
 
 type Result = { kind: "system"; system: SystemInfo } | { kind: "poi"; poi: Poi };
@@ -34,7 +34,7 @@ export function setupSearch(input: HTMLInputElement, list: HTMLUListElement, dep
           meta.textContent = r.system.pos.map((v) => v.toFixed(0)).join(", ");
         } else {
           li.classList.add("place");
-          name.append(glyph(categoryInfo(r.poi.category).shape), ` ${r.poi.name}`);
+          name.append(glyph(poiShape(r.poi)), ` ${r.poi.name}`);
           meta.textContent = describePoi(r.poi);
         }
         li.append(name, meta);

@@ -1,8 +1,10 @@
-// Commander layer: travel route, visited systems and current location.
+// Commander layer: travel route, visited systems and current location (a
+// pin over a pulsing ring).
 
 import * as THREE from "three";
 import type { CommanderTrack, Jump, Vec3, VisitedSystem } from "../api";
 import { edToWorld } from "./coords";
+import { PinSet } from "./pins";
 
 function ringTexture(): THREE.Texture {
   const size = 64;
@@ -52,6 +54,8 @@ export class CommanderLayer {
   private readonly route: THREE.Line;
   private readonly visited: THREE.Points;
   private readonly marker: THREE.Points;
+  /** Your pin; the frame loop sizes it (see PinSet.update). */
+  readonly pin = new PinSet("you");
 
   constructor() {
     this.route = new THREE.Line(
@@ -67,8 +71,8 @@ export class CommanderLayer {
     );
     this.route.frustumCulled = false;
     this.visited = overlayPoints(0x2c8a62, 4);
-    this.marker = overlayPoints(0xffb347, 20);
-    this.object.add(this.route, this.visited, this.marker);
+    this.marker = overlayPoints(0xff9a2e, 14);
+    this.object.add(this.route, this.visited, this.marker, this.pin.object);
     this.object.name = "commander";
   }
 
@@ -102,7 +106,7 @@ export class CommanderLayer {
 
   update(timeSeconds: number): void {
     const material = this.marker.material as THREE.PointsMaterial;
-    material.size = 18 + 6 * Math.sin(timeSeconds * 3);
+    material.size = 13 + 3 * Math.sin(timeSeconds * 3);
   }
 
   private rebuild(): void {
@@ -110,6 +114,7 @@ export class CommanderLayer {
     setPositions(this.visited.geometry, this.cache ?? this.jumps);
     const last = this.current();
     setPositions(this.marker.geometry, last ? [last] : []);
+    this.pin.set(last ? [{ pos: last.pos }] : []);
   }
 }
 

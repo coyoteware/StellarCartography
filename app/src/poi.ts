@@ -36,6 +36,11 @@ export const SHAPES = {
   star: 7,
   hexagon: 8,
   plus: 9,
+  // Ship pictograms, seen from above with the bow to the right.
+  megaship: 10,
+  cruiser: 11,
+  carrier: 12,
+  carrierHub: 13,
 } as const;
 export type Shape = keyof typeof SHAPES;
 
@@ -50,8 +55,8 @@ export const CATEGORIES: CategoryInfo[] = [
   { id: "guardian", label: "Guardian sites", shape: "triangle" },
   { id: "thargoid", label: "Thargoid sites", shape: "triangleDown" },
   { id: "xeno", label: "Mysteries", shape: "diamond" },
-  { id: "carrierHub", label: "Carrier hubs", shape: "dot" },
-  { id: "outpost", label: "Outposts & megaships", shape: "square" },
+  { id: "carrierHub", label: "Carrier hubs", shape: "carrierHub" },
+  { id: "outpost", label: "Outposts & megaships", shape: "megaship" },
   { id: "nebula", label: "Nebulae & clusters", shape: "ring" },
   { id: "planetaryNebula", label: "Planetary nebulae", shape: "ringDot" },
   { id: "stellar", label: "Stellar phenomena", shape: "star" },
@@ -63,6 +68,25 @@ const CATEGORY = new Map(CATEGORIES.map((c) => [c.id, c]));
 
 export function categoryInfo(id: PoiCategory): CategoryInfo {
   return CATEGORY.get(id) ?? CATEGORY.get("sights")!;
+}
+
+/**
+ * One entry's marker: its category's, except that "Outposts & megaships"
+ * draws ships as ships (the expeditions' carriers as carriers) and keeps the
+ * square for the outposts themselves.
+ */
+export function poiShape(p: Pick<Poi, "category" | "kind">): Shape {
+  if (p.category === "outpost") {
+    if (p.kind === "Megaship") return "megaship";
+    if (/carrier$/i.test(p.kind)) return "carrier";
+    return "square";
+  }
+  return categoryInfo(p.category).shape;
+}
+
+/** Shapes that are ship pictograms: long and thin, so drawn a size up. */
+export function isShip(shape: Shape): boolean {
+  return SHAPES[shape] >= SHAPES.megaship;
 }
 
 export interface Poi {
@@ -224,6 +248,34 @@ export function glyph(shape: Shape, size = 12): SVGSVGElement {
     case "plus":
       el("path", { d: "M-1.5 -5 H1.5 V-1.5 H5 V1.5 H1.5 V5 H-1.5 V1.5 H-5 V-1.5 H-1.5 Z", ...solid });
       break;
+    default: {
+      // The ships are drawn in a 16-unit box; holes are cut with even-odd fills.
+      const g = document.createElementNS(ns, "g");
+      g.setAttribute("transform", "scale(0.75) translate(-8 -8)");
+      g.setAttribute("fill", "currentColor");
+      for (const d of SHIP_PATHS[shape as keyof typeof SHIP_PATHS] ?? []) {
+        const p = document.createElementNS(ns, "path");
+        p.setAttribute("d", d);
+        p.setAttribute("fill-rule", "evenodd");
+        g.append(p);
+      }
+      svg.append(g);
+    }
   }
   return svg;
 }
+
+/** The ship pictograms as SVG paths (renderer/poi.ts draws the same shapes as distance functions). */
+const SHIP_PATHS = {
+  // A segmented spine with a command block amidships.
+  megaship: ["M0.6 6.2H13.4L15.6 8L13.4 9.8H0.6ZM3.1 6.2V9.8H4V6.2ZM11.6 6.2V9.8H12.5V6.2Z", "M5.6 3.6H10V12.4H5.6Z"],
+  // A bulk cruiser: a thin spine carrying cargo pods.
+  cruiser: [
+    "M0.4 6.9H13.2L15.6 8L13.2 9.1H0.4Z",
+    "M2.6 3.6h3v2.9h-3ZM6.4 3.6h3v2.9h-3ZM10.2 3.6h3v2.9h-3ZM2.6 9.5h3v2.9h-3ZM6.4 9.5h3v2.9h-3ZM10.2 9.5h3v2.9h-3Z",
+  ],
+  // A fleet carrier: pointed hull, engines across the stern, a landing pad cut out.
+  carrier: ["M2 5.2H11.2L15.6 8L11.2 10.8H2ZM5.4 6.4V9.6H8.6V6.4Z", "M0.4 3.4H3V12.6H0.4Z"],
+  // Three carriers in formation.
+  carrierHub: ["M0.6 1.5H6.2L9 3.4L6.2 5.3H0.6Z", "M0.6 10.7H6.2L9 12.6L6.2 14.5H0.6Z", "M7.2 6.1H12.8L15.6 8L12.8 9.9H7.2Z"],
+} as const;

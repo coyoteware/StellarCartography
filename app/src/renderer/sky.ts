@@ -1,4 +1,4 @@
-// Intergalactic backdrop: the sky beyond the Milky Way.
+// Intergalactic sky: what lies beyond the Milky Way.
 //
 // There are no foreground stars here; the catalogue draws the galaxy's own.
 // The sky is distant galaxies, about twenty thousand of them, nearly all
@@ -10,8 +10,10 @@
 // the scene at their real distances, so they shift as the view flies.
 //
 // Each galaxy is one instanced quad laid on the sky (a tangent plane at its
-// direction, so it keeps its orientation however the camera rolls), drawn
-// additively into the HDR target behind the glow. A galaxy smaller than a
+// direction, so it keeps its orientation however the camera rolls), added
+// into the star target as light the glow doesn't stand for (view.ts), so it
+// shows as it is: the glow doesn't step back for it, and it keeps its own
+// colours. A galaxy smaller than a
 // pixel is drawn as a blur of fixed size carrying its total light, so nothing
 // shimmers as the view turns; larger ones fade into a resolved profile:
 // spirals with a bulge, winding arms, pink star-forming knots and a dust lane
@@ -86,7 +88,7 @@ function redshift(c: Rgb, z: number): Rgb {
   return tint([c[0] + (REDSHIFTED[0] - c[0]) * z, c[1] + (REDSHIFTED[1] - c[1]) * z, c[2] + (REDSHIFTED[2] - c[2]) * z]);
 }
 
-// --- Sky geometry ------------------------------------------------------------
+// --- SkyRng geometry ------------------------------------------------------------
 
 /** J2000 equatorial to galactic (Hipparcos). */
 const EQ_TO_GAL = [
@@ -131,7 +133,7 @@ function mulberry32(seed: number): () => number {
   };
 }
 
-class Sky {
+class SkyRng {
   private readonly rng = mulberry32(SEED);
 
   random(): number {
@@ -187,7 +189,7 @@ const FIELD_MAX = 0.4 * DEG;
  * One galaxy of `kind` at `dir`, `scale` radians across its scale radius.
  * `depth` (0 near, 1 far) reddens it and is otherwise only colour.
  */
-function makeGalaxy(sky: Sky, dir: THREE.Vector3, kind: Kind, scale: number, depth: number): Galaxy {
+function makeGalaxy(sky: SkyRng, dir: THREE.Vector3, kind: Kind, scale: number, depth: number): Galaxy {
   const z = Math.min(Math.max(depth, 0), 1) ** 1.4 * sky.range(0.45, 1);
   const g: Galaxy = {
     pos: dir,
@@ -236,14 +238,14 @@ function fieldDepth(scale: number): number {
   return 1 - Math.log(scale / FIELD_MIN) / Math.log(FIELD_MAX / FIELD_MIN);
 }
 
-function pickKind(sky: Sky, ellipticals: number): Kind {
+function pickKind(sky: SkyRng, ellipticals: number): Kind {
   const u = sky.random();
   if (u < ellipticals) return ELLIPTICAL;
   return u < ellipticals + (1 - ellipticals) * 0.82 ? SPIRAL : IRREGULAR;
 }
 
 function distantGalaxies(): Galaxy[] {
-  const sky = new Sky();
+  const sky = new SkyRng();
   const out: Galaxy[] = [];
 
   // Superclusters and voids: a lumpy weight over the whole sky that the field
@@ -344,7 +346,7 @@ function distantGalaxies(): Galaxy[] {
 // --- The Local Group -----------------------------------------------------------
 
 function localGroup(): Galaxy[] {
-  const sky = new Sky();
+  const sky = new SkyRng();
   const out: Galaxy[] = [];
 
   // Andromeda (M31): 3.2° by 1° of bright disc, bulge-heavy, inclined 77°.
@@ -686,13 +688,15 @@ const fragmentShader = /* glsl */ `
       float edge = 1.0 - smoothstep(0.7, 1.0, length(vEdge));
       c = mix(c, shape * vBright.y * edge, detail);
     }
-    gl_FragColor = vec4(c * vLight, 1.0);
+    // Alpha counts the stars' light the glow also stands for (pointcloud.ts);
+    // none of this is.
+    gl_FragColor = vec4(c * vLight, 0.0);
   }
 `;
 
 // --- The layer -----------------------------------------------------------------
 
-export class Backdrop {
+export class IntergalacticSky {
   readonly mesh: THREE.Mesh;
   readonly count: number;
   private readonly material: THREE.ShaderMaterial;
@@ -748,12 +752,16 @@ export class Backdrop {
       transparent: true,
       depthWrite: false,
       depthTest: false,
-      blending: THREE.AdditiveBlending,
+      // Plain addition, alpha included (and it adds nothing to that).
+      blending: THREE.CustomBlending,
+      blendEquation: THREE.AddEquation,
+      blendSrc: THREE.OneFactor,
+      blendDst: THREE.OneFactor,
     });
     this.mesh = new THREE.Mesh(geometry, this.material);
     this.mesh.frustumCulled = false;
     this.mesh.renderOrder = -2;
-    this.mesh.name = "intergalactic-backdrop";
+    this.mesh.name = "intergalactic-sky";
     // Sizes are worked out in pixels, so it needs the pixel's angle on the
     // sky at the size and field of view being drawn.
     this.mesh.onBeforeRender = (renderer, _scene, camera) => {

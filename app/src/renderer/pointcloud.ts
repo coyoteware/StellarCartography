@@ -15,6 +15,7 @@
 
 import * as THREE from "three";
 import { dataUrl, type Vec3 } from "../api";
+import { GLOW_NEAR_FADE } from "./glow";
 
 interface IndexJson {
   version: number;
@@ -34,6 +35,9 @@ const MAX_LOAD_ATTEMPTS = 4;
 const TREE_WIDTH = 1024;
 const TREE_ROWS = 32;
 const MAX_TREE_NODES = (TREE_WIDTH * TREE_ROWS) / 4;
+/** Distances (ly) over which a star's light comes to count as standing in for the glow (see the vertex shader). */
+const SHARED_FROM = 800;
+const SHARED_TO = 3000;
 
 class OctreeNode {
   readonly children: OctreeNode[] = [];
@@ -127,6 +131,7 @@ const vertexShader = /* glsl */ `
   uniform float uFalloff;
   varying vec3 vColour;
   varying float vAlpha;
+  varying float vShared;
 
   // Mass codes a..h run from small cool dwarfs to large hot stars.
   const vec3 COLOURS[8] = vec3[8](
@@ -149,18 +154,30 @@ const vertexShader = /* glsl */ `
     float fade = pow(clamp(px * 2.5, 0.0, 1.0), uFalloff);
     vAlpha = fade * lodWeight(position) * uGain;
     vColour = COLOURS[int(m + 0.5)] * lum;
+    // How much of this star's light the glow also stands for. Only that share
+    // makes the glow step back and takes on its colour (view.ts): a nearby
+    // star in front of distant glow mustn't dim it. The glow fades in from
+    // ${GLOW_NEAR_FADE[0]} to ${GLOW_NEAR_FADE[1]} ly (glow.ts), but this ramp starts later so stars
+    // near the camera keep their own colours, at the cost of counting them
+    // twice there.
+    vShared = smoothstep(${SHARED_FROM.toFixed(1)}, ${SHARED_TO.toFixed(1)}, length(mv.xyz));
   }
 `;
 
+// Alpha carries the light the glow also stands for (vShared): the material
+// adds both straight onto the target, colour and alpha alike.
 const fragmentShader = /* glsl */ `
   varying vec3 vColour;
   varying float vAlpha;
+  varying float vShared;
+  const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
   void main() {
     vec2 c = gl_PointCoord - 0.5;
     float r2 = dot(c, c) * 4.0;
     if (r2 > 1.0) discard;
     float falloff = (1.0 - r2) * (1.0 - r2);
-    gl_FragColor = vec4(vColour * falloff * vAlpha, 1.0);
+    vec3 light = vColour * falloff * vAlpha;
+    gl_FragColor = vec4(light, dot(light, LUMA) * vShared);
   }
 `;
 
@@ -437,7 +454,10 @@ export class PointCloud {
       transparent: true,
       depthWrite: false,
       depthTest: false,
-      blending: THREE.AdditiveBlending,
+      blending: THREE.CustomBlending,
+      blendEquation: THREE.AddEquation,
+      blendSrc: THREE.OneFactor,
+      blendDst: THREE.OneFactor,
     });
   }
 

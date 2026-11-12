@@ -39,8 +39,10 @@ export interface ViewSettings {
   poi: boolean;
   /** Point-of-interest categories switched off (a `PoiCategory` id, see poi.ts). */
   poiHidden: string[];
+  /** Draw friends' last known positions (the names are `Settings.friends`). */
+  friends: boolean;
   /** Draw the distant galaxies behind the Milky Way. */
-  backdrop: boolean;
+  sky: boolean;
 }
 
 /** Where the details panel looks systems up online; the other site is the fallback. */
@@ -55,9 +57,25 @@ export interface Settings {
   detailsSource: OnlineSource;
   /** Offer an update when the catalogue or populated systems are over a week old. */
   updateReminders: boolean;
+  /** Commander names whose last known position is fetched from EDSM. */
+  friends: string[];
   view: ViewSettings;
   /** Keyboard shortcuts the user changed: action id → its two keys (see keys.ts). */
   keys: Record<string, string[]>;
+  /** The system behind the Home jump button; null hides the button. */
+  homeSystem: SavedSystem | null;
+  /** The system behind the Squadron jump button; null hides the button. */
+  squadronSystem: SavedSystem | null;
+}
+
+/** The jump buttons whose system the user picks. */
+export type Bookmark = "home" | "squadron";
+
+/** A system kept for a jump button: no rowid, since rebuilds renumber the rows. */
+export interface SavedSystem {
+  id64: string | null;
+  name: string;
+  pos: Vec3;
 }
 
 /** Free space for a catalogue build in a folder (bytes). */
@@ -113,6 +131,27 @@ export interface CommanderTrack {
   fid: string;
   name: string;
   jumps: Jump[];
+  /** Their own fleet carrier, when the journals mention one. */
+  carrier?: Carrier | null;
+}
+
+/** Somewhere a carrier was (or will be); `pos` is the catalogue's, or the boxel centre. */
+export interface CarrierPlace {
+  timestamp: string;
+  system: string;
+  id64: string | null;
+  pos: Vec3 | null;
+}
+
+export interface Carrier {
+  /** CarrierID, which is also its MarketID. */
+  id: number;
+  name: string | null;
+  callsign: string | null;
+  /** Where it was last seen. */
+  at: CarrierPlace | null;
+  /** A jump booked since: from `departure` (ISO, UTC) on it's at `to`. */
+  jump: { timestamp: string; departure: string; to: CarrierPlace } | null;
 }
 
 export interface CommanderPayload {
@@ -244,6 +283,39 @@ export interface SystemDetails {
   links: { label: string; url: string }[];
 }
 
+// --- Friends (crates/galaxy-core/src/friends.rs) --------------------------------
+
+/** What EDSM last knew about one commander. */
+export interface FriendPosition {
+  name: string;
+  /** False when EDSM has no commander by this name (or the profile hides everything). */
+  known: boolean;
+  system: string | null;
+  /** In-game coordinates (ly); null when the system has none on EDSM. */
+  pos: Vec3 | null;
+  /** When EDSM last saw them there ("YYYY-MM-DD HH:MM:SS" UTC); private profiles hide it. */
+  date: string | null;
+  /** The station they were docked at, when docked. */
+  dockedAt: string | null;
+  ship: string | null;
+  /** Their EDSM profile page. */
+  profileUrl: string | null;
+}
+
+/** One friends-list lookup: the position, or why there isn't one. */
+export interface FriendStatus {
+  name: string;
+  position: FriendPosition | null;
+  error: string | null;
+}
+
+/** Last known positions of the commanders in Settings → Friends. `refresh` skips the short cache. */
+export const friendPositions = (refresh = false) => invoke<FriendStatus[]>("friend_positions", { refresh });
+/** Saves the friends list (trimmed and deduplicated by the backend). */
+export const setFriends = (names: string[]) => invoke<void>("set_friends", { names });
+/** Names seen on the in-game friends list or in wings, newest first — suggestions. */
+export const journalFriends = () => invoke<string[]>("journal_friends");
+
 // --- Route plotting (app/src-tauri/src/routes.rs) ------------------------------
 
 /** A ship's fuel model from the journal's Loadout event (galaxy-core/src/ship.rs). */
@@ -365,6 +437,8 @@ export const getSettings = () => invoke<Settings>("get_settings");
 export const saveViewSettings = (view: ViewSettings) => invoke<void>("save_view_settings", { view });
 /** Saves the keyboard shortcuts that differ from the defaults. */
 export const saveKeys = (keys: Record<string, string[]>) => invoke<void>("save_keys", { keys });
+/** Puts a system behind a jump button; `null` clears it. */
+export const setBookmark = (slot: Bookmark, system: SavedSystem | null) => invoke<void>("set_bookmark", { slot, system });
 /** Switches to an existing build in `dir` (or its `data` subfolder). */
 export const useDataDir = (dir: string) => invoke<DataStatus>("use_data_dir", { dir });
 /** `null` goes back to the game's default journal folder. */
@@ -442,6 +516,10 @@ export function onPoiProgress(handler: (p: PoiProgress) => void): Promise<Unlist
 
 export function onPoiDone(handler: (d: PoiDone) => void): Promise<UnlistenFn> {
   return listen<PoiDone>("poi-done", (e) => handler(e.payload));
+}
+
+export function onCommanderCarrier(handler: (fid: string, carrier: Carrier | null) => void): Promise<UnlistenFn> {
+  return listen<{ fid: string; carrier: Carrier | null }>("commander-carrier", (e) => handler(e.payload.fid, e.payload.carrier));
 }
 
 export function onCommanderJump(handler: (fid: string, jump: Jump) => void): Promise<UnlistenFn> {

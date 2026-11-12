@@ -83,7 +83,7 @@ every row.
 | Move up, down (galactic north) | R, F, or Page Up, Page Down |
 | Orbit left, right, up, down | Q, E, T, G |
 | Zoom in, out | Z, X, or =, - |
-| Jump to Sol, the whole galaxy, your commander, home, the squadron capital | 1 to 5 (C and Home also work for commander and home) |
+| Jump to Sol, the whole galaxy, your commander, your home system, your squadron capital | 1 to 5 (C and Home also work for commander and home) |
 | Galaxy glow, known systems, travel history, points of interest, plotted route, distant galaxies on/off | Shift+1 to Shift+6 |
 | Search | / or Ctrl+F |
 | Places open/closed | P |
@@ -176,6 +176,13 @@ in `%LOCALAPPDATA%\io.github.stellarcartography.viewer\details-cache.sqlite`.
 Settings → System details switches the online source, or turns lookups off
 (journal only).
 
+## Jump buttons
+
+Home and Squadron, under the search box (keys 4 and 5), fly to systems you
+choose in Settings → Jump buttons: type a name and pick it from the list. Each
+button shows once it has a system; Clear hides it again. The choice is saved
+in settings.json under `homeSystem` and `squadronSystem`.
+
 ## Build the galaxy data from the command line
 
 The same build is available as a CLI, from the repository root:
@@ -203,6 +210,13 @@ cargo run --release -p ingest -- --populated --out data
 cargo run --release -p ingest -- --poi --out data
 ```
 
+`--maps` redraws `density.png` and `coverage.png` from the `galaxy.sqlite`
+already in `--out`, without downloading anything (about a minute):
+
+```bash
+cargo run --release -p ingest -- --maps --out data
+```
+
 ## Installer
 
 ```bash
@@ -217,17 +231,24 @@ installed app won't find the repo's `data/` by itself: on first run, choose
 
 ## Tests
 
+The build pipeline runs locally (there is no hosted CI):
+
+```bash
+scripts\ci.cmd
+```
+
+does a frozen-lockfile install, typechecks and builds the frontend, then runs
+clippy and the Rust tests. Add `--installer` to also build the Windows
+installer (`pnpm tauri build`); the setup exe lands in
+`target\release\bundle\nsis\`.
+
+Individual checks:
+
 ```bash
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 pnpm --dir app typecheck
 ```
-
-GitHub Actions ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs the
-same checks on Windows on every push, after a frozen-lockfile install and a
-frontend build. Pushes to `main` also build the installer and attach it to the
-run as an artifact (kept 14 days); for any other branch, start the workflow
-from the Actions tab with "Run workflow".
 
 ## Data and credits
 
@@ -240,7 +261,7 @@ from the Actions tab with "Run workflow".
 - The galaxy glow ray-marches a density map built from id64 boxel indices. The
   idea comes from [spansh/elite-galaxy-map](https://github.com/spansh/elite-galaxy-map);
   the shader and data here are our own.
-- The intergalactic backdrop is generated: a fixed-seed sky of distant galaxies
+- The intergalactic sky is generated: a fixed-seed sky of distant galaxies
   in clusters and filaments, with no foreground stars. Andromeda, Triangulum
   and the Magellanic Clouds are placed from their published positions and
   distances.

@@ -10,7 +10,7 @@ mod details;
 mod routes;
 mod settings;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -20,11 +20,11 @@ use data::{DataStatus, Dataset, DirOrigin};
 use details::{Online, OnlineSource};
 use galaxy_core::details::SystemDetails;
 use galaxy_core::id64::Id64;
-use galaxy_core::journal::{CommanderSource, CommanderTrack, Jump, JournalSource};
+use galaxy_core::journal::{Carrier, CommanderSource, CommanderTrack, Jump, JournalSource};
 use galaxy_core::visited::{self, VisitedEntry};
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
-use settings::{Settings, ViewSettings};
+use settings::{Bookmark, SavedSystem, Settings, ViewSettings};
 use tauri::http::{header, Response, StatusCode};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -123,6 +123,14 @@ struct JumpEvent {
     jump: Jump,
 }
 
+/// A commander's own fleet carrier changed (or went: `None`).
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct CarrierEvent {
+    fid: String,
+    carrier: Option<Carrier>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SettingsView {
@@ -133,8 +141,11 @@ struct SettingsView {
     journal_dir_found: bool,
     details_source: OnlineSource,
     update_reminders: bool,
+    friends: Vec<String>,
     view: ViewSettings,
     keys: BTreeMap<String, Vec<String>>,
+    home_system: Option<SavedSystem>,
+    squadron_system: Option<SavedSystem>,
 }
 
 #[derive(Serialize, Clone)]
@@ -270,8 +281,8 @@ fn get_system(state: State<AppState>, rowid: u32) -> CmdResult<Option<SystemInfo
 #[tauri::command]
 fn commander_history(state: State<AppState>) -> CmdResult<CommanderPayload> {
     let configured = journal_dir(&*state.settings.lock().map_err(err)?);
-    let mut source = state.commander.lock().map_err(err)?;
-    let Some(source) = source.as_mut() else {
+    let mut guard = state.commander.lock().map_err(err)?;
+    let Some(source) = guard.as_mut() else {
         return Ok(CommanderPayload {
             journal_dir: configured.as_deref().map(display),
             found: false,
@@ -281,12 +292,36 @@ fn commander_history(state: State<AppState>) -> CmdResult<CommanderPayload> {
     };
     let dir = display(source.dir());
     let history = source.history().map_err(err)?;
-    Ok(CommanderPayload {
-        journal_dir: Some(dir),
-        found: true,
-        latest_fid: history.latest().map(|c| c.fid.clone()),
-        commanders: history.commanders.values().cloned().collect(),
-    })
+    let latest_fid = history.latest().map(|c| c.fid.clone());
+    let mut commanders: Vec<CommanderTrack> = history.commanders.values().cloned().collect();
+    // Not while holding the journal: placing takes the catalogue's lock.
+    drop(guard);
+    for carrier in commanders.iter_mut().filter_map(|c| c.carrier.as_mut()) {
+        place_carrier(&state, carrier);
+    }
+    Ok(CommanderPayload { journal_dir: Some(dir), found: true, latest_fid, commanders })
+}
+
+/// Gives the carrier's places coordinates where the journal had none: from
+/// the catalogue, or the boxel centre for a system it doesn't hold.
+fn place_carrier(state: &AppState, carrier: &mut Carrier) {
+    let slot = state.data.read().ok();
+    let db = slot.as_ref().and_then(|s| s.dataset.as_ref()).and_then(|d| d.db.lock().ok());
+    let places = carrier.at.iter_mut().chain(carrier.jump.as_mut().map(|j| &mut j.to));
+    for place in places {
+        let Some(id64) = place.id64.filter(|_| place.pos.is_none()) else { continue };
+        let found = db.as_ref().and_then(|db| {
+            let mut stmt = db.prepare_cached("SELECT x32, y32, z32 FROM systems WHERE id64 = ?1").ok()?;
+            stmt.query_row([id64 as i64], |r| {
+                let c = |i| -> rusqlite::Result<f32> { Ok(r.get::<_, i64>(i)? as f32 / 32.0) };
+                Ok([c(0)?, c(1)?, c(2)?])
+            })
+            .optional()
+            .ok()
+            .flatten()
+        });
+        place.pos = Some(found.unwrap_or_else(|| Id64::decode(id64).boxel_centre()));
+    }
 }
 
 #[derive(Serialize)]
@@ -375,8 +410,11 @@ fn get_settings(state: State<AppState>) -> CmdResult<SettingsView> {
         journal_dir_custom: settings.journal_dir.is_some(),
         details_source: settings.details_source,
         update_reminders: settings.update_reminders,
+        friends: settings.friends.clone(),
         view: settings.view.clone(),
         keys: settings.keys.clone(),
+        home_system: settings.home_system.clone(),
+        squadron_system: settings.squadron_system.clone(),
     })
 }
 
@@ -396,6 +434,21 @@ fn save_keys(state: State<AppState>, keys: BTreeMap<String, Vec<String>>) -> Cmd
     let mut settings = state.settings.lock().map_err(err)?;
     if settings.keys != keys {
         settings.keys = keys;
+        save_settings(&state, &settings)?;
+    }
+    Ok(())
+}
+
+/// Puts `system` behind a jump button; `None` clears it (and hides the button).
+#[tauri::command]
+fn set_bookmark(state: State<AppState>, slot: Bookmark, system: Option<SavedSystem>) -> CmdResult<()> {
+    if let Some(problem) = system.as_ref().and_then(SavedSystem::problem) {
+        return Err(problem.into());
+    }
+    let mut settings = state.settings.lock().map_err(err)?;
+    let saved = settings.bookmark_mut(slot);
+    if *saved != system {
+        *saved = system;
         save_settings(&state, &settings)?;
     }
     Ok(())
@@ -559,6 +612,65 @@ async fn system_details(
     let online = state.online.lookup(first, id64, &name, refresh).await;
     let base = SystemDetails { links: galaxy_core::details::links(id64, &name, None), ..Default::default() };
     Ok(galaxy_core::details::merge(galaxy_core::details::combine(journal, online), base))
+}
+
+// --- Friends -------------------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FriendStatus {
+    name: String,
+    /// `None` when the lookup failed; `error` says why.
+    position: Option<galaxy_core::friends::FriendPosition>,
+    error: Option<String>,
+}
+
+/// Saves the friends list: trimmed, deduplicated case-insensitively, order kept.
+#[tauri::command]
+fn set_friends(state: State<AppState>, names: Vec<String>) -> CmdResult<()> {
+    let mut seen: Vec<String> = Vec::new();
+    let mut friends = Vec::new();
+    for name in names {
+        let name = name.trim().to_string();
+        let key = name.to_lowercase();
+        if !name.is_empty() && !seen.contains(&key) {
+            seen.push(key);
+            friends.push(name);
+        }
+    }
+    let mut settings = state.settings.lock().map_err(err)?;
+    if settings.friends != friends {
+        settings.friends = friends;
+        save_settings(&state, &settings)?;
+    }
+    Ok(())
+}
+
+/// The last known EDSM position of every commander on the friends list, one
+/// lookup each (throttled). A friend who failed keeps their place in the
+/// list with the error. `refresh` skips the short cache.
+#[tauri::command]
+async fn friend_positions(state: State<'_, AppState>, refresh: bool) -> CmdResult<Vec<FriendStatus>> {
+    let names = state.settings.lock().map_err(err)?.friends.clone();
+    let mut out = Vec::with_capacity(names.len());
+    for name in names {
+        match state.online.friend_position(&name, refresh).await {
+            Ok(p) => out.push(FriendStatus { name, position: Some(p), error: None }),
+            Err(e) => out.push(FriendStatus { name, position: None, error: Some(format!("{e:#}")) }),
+        }
+    }
+    Ok(out)
+}
+
+/// Commander names seen in the journals' `Friends` and wing events, newest
+/// sighting first: suggestions for the friends list.
+#[tauri::command]
+fn journal_friends(state: State<AppState>) -> CmdResult<Vec<String>> {
+    let mut source = state.commander.lock().map_err(err)?;
+    match source.as_mut() {
+        Some(s) => s.friend_names().map_err(err),
+        None => Ok(Vec::new()),
+    }
 }
 
 // --- Route plotting ------------------------------------------------------------
@@ -938,27 +1050,49 @@ fn serve(data_dir: Option<&Path>, path: &str) -> Response<Vec<u8>> {
     }
 }
 
-/// Polls the journal once a second and forwards new jumps to the web view.
-/// Polling rather than file-change notifications: the game keeps the journal
-/// open and Windows doesn't reliably report its writes.
+/// Polls the journal once a second and forwards new jumps, and changes to
+/// commanders' own carriers, to the web view. Polling rather than
+/// file-change notifications: the game keeps the journal open and Windows
+/// doesn't reliably report its writes.
 fn spawn_journal_watcher(app: AppHandle) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(1));
-        let state = app.state::<AppState>();
-        let new = match state.commander.lock() {
-            Ok(mut source) => match source.as_mut() {
-                Some(s) => s.poll(),
-                None => continue,
-            },
-            Err(_) => return,
-        };
-        match new {
-            Ok(jumps) => {
-                for (fid, jump) in jumps {
-                    let _ = app.emit("commander-jump", JumpEvent { fid, jump });
+    std::thread::spawn(move || {
+        let mut sent: HashMap<String, Option<Carrier>> = HashMap::new();
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let state = app.state::<AppState>();
+            let (new, carriers) = match state.commander.lock() {
+                Ok(mut source) => match source.as_mut() {
+                    Some(s) => {
+                        let new = s.poll();
+                        let carriers: Vec<(String, Option<Carrier>)> = s
+                            .history()
+                            .map(|h| h.commanders.iter().map(|(fid, c)| (fid.clone(), c.carrier.clone())).collect())
+                            .unwrap_or_default();
+                        (new, carriers)
+                    }
+                    None => continue,
+                },
+                Err(_) => return,
+            };
+            match new {
+                Ok(jumps) => {
+                    for (fid, jump) in jumps {
+                        let _ = app.emit("commander-jump", JumpEvent { fid, jump });
+                    }
                 }
+                Err(e) => eprintln!("journal poll failed: {e}"),
             }
-            Err(e) => eprintln!("journal poll failed: {e}"),
+            for (fid, carrier) in carriers {
+                if sent.get(&fid) == Some(&carrier) {
+                    continue;
+                }
+                sent.insert(fid.clone(), carrier.clone());
+                let mut carrier = carrier;
+                if let Some(c) = carrier.as_mut() {
+                    place_carrier(&state, c);
+                }
+                let _ = app.emit("commander-carrier", CarrierEvent { fid, carrier });
+            }
         }
     });
 }
@@ -986,6 +1120,7 @@ pub fn run() {
             get_settings,
             save_view_settings,
             save_keys,
+            set_bookmark,
             use_data_dir,
             set_journal_dir,
             pick_folder,
@@ -1004,6 +1139,9 @@ pub fn run() {
             cancel_poi_update,
             poi_update_status,
             ship_loadout,
+            set_friends,
+            friend_positions,
+            journal_friends,
             plot_route,
             cancel_plot,
             saved_route,

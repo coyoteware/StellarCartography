@@ -19,10 +19,16 @@ pub struct Settings {
     pub details_source: OnlineSource,
     /// Offer an update when the catalogue or populated systems are over a week old.
     pub update_reminders: bool,
+    /// Commander names whose last known position is fetched from EDSM.
+    pub friends: Vec<String>,
     pub view: ViewSettings,
     /// Keyboard shortcuts the user changed: action id → its two keys ("" is
     /// an empty slot). Actions not listed keep the web view's defaults.
     pub keys: BTreeMap<String, Vec<String>>,
+    /// The system behind the Home jump button; unset hides the button.
+    pub home_system: Option<SavedSystem>,
+    /// The system behind the Squadron jump button; unset hides the button.
+    pub squadron_system: Option<SavedSystem>,
 }
 
 impl Default for Settings {
@@ -32,10 +38,49 @@ impl Default for Settings {
             journal_dir: None,
             details_source: OnlineSource::default(),
             update_reminders: true,
+            friends: Vec::new(),
             view: ViewSettings::default(),
             keys: BTreeMap::new(),
+            home_system: None,
+            squadron_system: None,
         }
     }
+}
+
+/// A system kept for a jump button, as the catalogue had it when it was
+/// picked. No catalogue row: rebuilds renumber the rows.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedSystem {
+    /// Kept as a string, as the web view has it: addresses can exceed what a
+    /// JavaScript number holds exactly.
+    pub id64: Option<String>,
+    pub name: String,
+    /// Light years, Sol at the origin.
+    pub pos: [f64; 3],
+}
+
+impl SavedSystem {
+    /// Why this can't be saved, if it can't.
+    pub fn problem(&self) -> Option<&'static str> {
+        if self.name.trim().is_empty() {
+            Some("The system has no name.")
+        } else if !self.pos.iter().all(|v| v.is_finite()) {
+            Some("The system has no position.")
+        } else if self.id64.as_deref().is_some_and(|id| id.parse::<u64>().is_err()) {
+            Some("The system's id64 isn't a number.")
+        } else {
+            None
+        }
+    }
+}
+
+/// The jump buttons whose system the user picks.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum Bookmark {
+    Home,
+    Squadron,
 }
 
 /// Display preferences owned by the web view; the backend only stores them.
@@ -58,8 +103,10 @@ pub struct ViewSettings {
     pub poi: bool,
     /// Point-of-interest categories switched off, in the directory and on the map.
     pub poi_hidden: Vec<String>,
+    /// Draw friends' last known positions (the names are `Settings::friends`).
+    pub friends: bool,
     /// Draw the distant galaxies behind the Milky Way.
-    pub backdrop: bool,
+    pub sky: bool,
 }
 
 impl Default for ViewSettings {
@@ -76,12 +123,20 @@ impl Default for ViewSettings {
             poi: true,
             // Thousands of catalogue entries: they'd crowd out everything else.
             poi_hidden: vec!["planetaryNebula".into()],
-            backdrop: true,
+            friends: true,
+            sky: true,
         }
     }
 }
 
 impl Settings {
+    pub fn bookmark_mut(&mut self, slot: Bookmark) -> &mut Option<SavedSystem> {
+        match slot {
+            Bookmark::Home => &mut self.home_system,
+            Bookmark::Squadron => &mut self.squadron_system,
+        }
+    }
+
     /// Reads the settings file, falling back to defaults if it's missing or
     /// unreadable (a broken file is reported, then replaced on the next save).
     pub fn load(path: &Path) -> Self {
@@ -127,6 +182,11 @@ mod tests {
                 ..Default::default()
             },
             keys: BTreeMap::from([("moveUp".into(), vec!["Space".into(), String::new()])]),
+            home_system: Some(SavedSystem {
+                id64: Some("10477373803".into()),
+                name: "Sol".into(),
+                pos: [0.0, 0.0, 0.0],
+            }),
             ..Default::default()
         };
         s.save(&path).unwrap();
@@ -142,9 +202,13 @@ mod tests {
         assert!(partial.view.poi, "files from before the points of interest");
         assert_eq!(partial.view.poi_hidden, ["planetaryNebula"]);
         assert_eq!(partial.details_source, OnlineSource::Spansh);
+        assert!(partial.view.friends, "files from before the friends layer");
+        assert!(partial.friends.is_empty(), "files from before the friends list");
 
         assert!(partial.update_reminders, "reminders are on unless turned off");
         assert!(partial.keys.is_empty(), "files from before the key bindings");
+        assert_eq!(partial.home_system, None, "files from before the jump-button systems");
+        assert_eq!(partial.squadron_system, None);
 
         std::fs::write(&path, r#"{"detailsSource":"off","updateReminders":false}"#).unwrap();
         assert_eq!(Settings::load(&path).details_source, OnlineSource::Off);
@@ -152,5 +216,23 @@ mod tests {
 
         std::fs::write(&path, "not json").unwrap();
         assert_eq!(Settings::load(&path), Settings::default());
+    }
+
+    #[test]
+    fn bookmarks_go_in_their_own_slot_and_are_checked() {
+        let sol = SavedSystem { id64: Some("10477373803".into()), name: "Sol".into(), pos: [0.0; 3] };
+        let mut s = Settings::default();
+        *s.bookmark_mut(Bookmark::Squadron) = Some(sol.clone());
+        assert_eq!(s.squadron_system.as_ref(), Some(&sol));
+        assert_eq!(s.home_system, None);
+
+        let slot: Bookmark = serde_json::from_str(r#""home""#).unwrap();
+        assert_eq!(slot, Bookmark::Home);
+
+        assert_eq!(sol.problem(), None);
+        assert_eq!(SavedSystem { id64: None, ..sol.clone() }.problem(), None, "id64 is optional");
+        assert!(SavedSystem { name: " ".into(), ..sol.clone() }.problem().is_some());
+        assert!(SavedSystem { pos: [f64::NAN, 0.0, 0.0], ..sol.clone() }.problem().is_some());
+        assert!(SavedSystem { id64: Some("Sol".into()), ..sol }.problem().is_some());
     }
 }

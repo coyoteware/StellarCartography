@@ -4,7 +4,9 @@
 //! per line) to `%USERPROFILE%\Saved Games\Frontier Developments\Elite Dangerous`.
 //! Only the events that carry a position (`FSDJump`, `CarrierJump`, `Location`),
 //! the ones that say which commander is playing (`Commander`, `LoadGame`),
-//! `Docked` and `ApproachSettlement` are read. The arrival, docking and
+//! `Docked` and `ApproachSettlement` are read, and the owner's fleet-carrier
+//! events (`CarrierBuy`, `CarrierStats`, `CarrierLocation`,
+//! `CarrierJumpRequest`, `CarrierJumpCancelled`). The arrival, docking and
 //! approach events also describe the system and station (factions,
 //! Powerplay, services...); the latest line of each is kept as a
 //! [`Snapshot`] and parsed on demand (see [`crate::details::journal`]).
@@ -43,6 +45,101 @@ pub enum Event {
     /// The current ship's modules; the line is kept whole and parsed on
     /// demand (see [`crate::ship`]).
     Loadout { timestamp: String },
+    /// Names seen on the friends list (`Friends`) or in a wing (`WingAdd`,
+    /// `WingJoin`), for suggesting commanders to follow. `status` is the
+    /// `Friends` event's (`Online`, `Added`, `Lost`...); wing events have none.
+    FriendsSeen { timestamp: String, names: Vec<String>, status: Option<String> },
+    /// One of the owner's events about their own fleet carrier (`id` is its
+    /// CarrierID, which is also its MarketID). Squadron carriers are left out.
+    Carrier { timestamp: String, id: u64, update: CarrierUpdate },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CarrierUpdate {
+    /// `CarrierBuy` (callsign, and where it was bought) or `CarrierStats` (name and callsign).
+    Identity { name: Option<String>, callsign: Option<String>, at: Option<(String, u64)> },
+    /// `CarrierLocation`, written at login.
+    At { system: String, id64: u64 },
+    /// `CarrierJumpRequest`: it jumps to `system` at `departure`.
+    JumpBooked { system: String, id64: u64, departure: String },
+    /// `CarrierJumpCancelled`.
+    JumpCancelled,
+}
+
+/// The commander's own fleet carrier, as the owner's events describe it.
+#[derive(Debug, Default, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Carrier {
+    /// Its CarrierID, which is also its MarketID.
+    pub id: u64,
+    pub name: Option<String>,
+    pub callsign: Option<String>,
+    /// Where it was last seen.
+    pub at: Option<CarrierPlace>,
+    /// A jump booked since: from `departure` on it's at the destination.
+    pub jump: Option<CarrierJump>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CarrierPlace {
+    pub timestamp: String,
+    pub system: String,
+    #[serde(serialize_with = "crate::serialize_id64")]
+    pub id64: Option<u64>,
+    /// From the event when it has one (`CarrierJump`, `Location`); the app looks the rest up.
+    pub pos: Option<Vec3>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CarrierJump {
+    /// When it was booked.
+    pub timestamp: String,
+    /// When it jumps.
+    pub departure: String,
+    pub to: CarrierPlace,
+}
+
+impl Carrier {
+    fn apply(&mut self, timestamp: &str, update: CarrierUpdate) {
+        let place = |system: String, id64: u64| CarrierPlace { timestamp: timestamp.into(), system, id64: Some(id64), pos: None };
+        match update {
+            CarrierUpdate::Identity { name, callsign, at } => {
+                if name.is_some() {
+                    self.name = name;
+                }
+                if callsign.is_some() {
+                    self.callsign = callsign;
+                }
+                if let Some((system, id64)) = at {
+                    self.arrive(place(system, id64));
+                }
+            }
+            CarrierUpdate::At { system, id64 } => self.arrive(place(system, id64)),
+            CarrierUpdate::JumpBooked { system, id64, departure } => {
+                let to = CarrierPlace { timestamp: departure.clone(), system, id64: Some(id64), pos: None };
+                self.jump = Some(CarrierJump { timestamp: timestamp.into(), departure, to });
+            }
+            CarrierUpdate::JumpCancelled => self.jump = None,
+        }
+    }
+
+    /// Seen at `place`: a jump due by then has happened (or been called off).
+    fn arrive(&mut self, place: CarrierPlace) {
+        if self.jump.as_ref().is_some_and(|j| j.departure <= place.timestamp) {
+            self.jump = None;
+        }
+        self.at = Some(place);
+    }
+}
+
+/// The latest `Friends`/wing sighting of one name.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct FriendSighting {
+    pub timestamp: String,
+    /// The last `Friends` status; `None` when only seen in a wing.
+    pub status: Option<String>,
 }
 
 /// The latest journal line describing a system or station.
@@ -126,6 +223,9 @@ pub struct CommanderTrack {
     pub fid: String,
     pub name: String,
     pub jumps: Vec<Jump>,
+    /// Their own fleet carrier, when the journals mention one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub carrier: Option<Carrier>,
 }
 
 /// Travel history for every commander found in the journals, keyed by FID.
@@ -165,9 +265,29 @@ struct RawEvent {
     market_id: Option<u64>,
     #[serde(rename = "Docked")]
     docked: Option<bool>,
+    #[serde(rename = "Status")]
+    status: Option<String>,
+    /// `WingJoin`'s wing members: names, or objects with a `Name`, depending
+    /// on the game version.
+    #[serde(rename = "Others")]
+    others: Option<Vec<serde_json::Value>>,
+    #[serde(rename = "CarrierID")]
+    carrier_id: Option<u64>,
+    #[serde(rename = "CarrierType")]
+    carrier_type: Option<String>,
+    #[serde(rename = "Callsign")]
+    callsign: Option<String>,
+    /// `CarrierJumpRequest`'s destination.
+    #[serde(rename = "SystemName")]
+    system_name: Option<String>,
+    #[serde(rename = "DepartureTime")]
+    departure_time: Option<String>,
+    /// `CarrierBuy`'s system.
+    #[serde(rename = "Location")]
+    location: Option<String>,
 }
 
-const INTERESTING: [&str; 8] = [
+const INTERESTING: [&str; 16] = [
     "\"FSDJump\"",
     "\"CarrierJump\"",
     "\"Location\"",
@@ -176,6 +296,14 @@ const INTERESTING: [&str; 8] = [
     "\"Docked\"",
     "\"ApproachSettlement\"",
     "\"Loadout\"",
+    "\"Friends\"",
+    "\"WingAdd\"",
+    "\"WingJoin\"",
+    "\"CarrierBuy\"",
+    "\"CarrierStats\"",
+    "\"CarrierLocation\"",
+    "\"CarrierJumpRequest\"",
+    "\"CarrierJumpCancelled\"",
 ];
 
 /// Parses one journal line. Returns `None` for events we don't use or for
@@ -211,6 +339,50 @@ pub fn parse_line(line: &str) -> Option<Event> {
         "Commander" => Some(Event::Commander { fid: raw.fid?, name: raw.name? }),
         "LoadGame" => Some(Event::Commander { fid: raw.fid?, name: raw.commander? }),
         "Loadout" => Some(Event::Loadout { timestamp: raw.timestamp.unwrap_or_default() }),
+        "Friends" => Some(Event::FriendsSeen {
+            timestamp: raw.timestamp.unwrap_or_default(),
+            names: vec![raw.name?],
+            status: raw.status,
+        }),
+        "WingAdd" => Some(Event::FriendsSeen {
+            timestamp: raw.timestamp.unwrap_or_default(),
+            names: vec![raw.name?],
+            status: None,
+        }),
+        "WingJoin" => {
+            let names: Vec<String> = raw
+                .others?
+                .into_iter()
+                .filter_map(|v| match v {
+                    serde_json::Value::String(s) => Some(s),
+                    serde_json::Value::Object(o) => o.get("Name").and_then(|n| n.as_str()).map(String::from),
+                    _ => None,
+                })
+                .collect();
+            (!names.is_empty()).then(|| Event::FriendsSeen {
+                timestamp: raw.timestamp.unwrap_or_default(),
+                names,
+                status: None,
+            })
+        }
+        "CarrierBuy" | "CarrierStats" | "CarrierLocation" | "CarrierJumpRequest" | "CarrierJumpCancelled" => {
+            // Squadron carriers write these too; older journals don't say which.
+            if raw.carrier_type.as_deref().is_some_and(|t| t != "FleetCarrier") {
+                return None;
+            }
+            let update = match raw.event.as_str() {
+                "CarrierBuy" => CarrierUpdate::Identity { name: None, callsign: raw.callsign, at: raw.location.zip(raw.system_address) },
+                "CarrierStats" => CarrierUpdate::Identity { name: raw.name, callsign: raw.callsign, at: None },
+                "CarrierLocation" => CarrierUpdate::At { system: raw.star_system?, id64: raw.system_address? },
+                "CarrierJumpRequest" => CarrierUpdate::JumpBooked {
+                    system: raw.system_name?,
+                    id64: raw.system_address?,
+                    departure: raw.departure_time?,
+                },
+                _ => CarrierUpdate::JumpCancelled,
+            };
+            Some(Event::Carrier { timestamp: raw.timestamp.unwrap_or_default(), id: raw.carrier_id?, update })
+        }
         _ => None,
     }
 }
@@ -263,6 +435,8 @@ pub struct Reader {
     pub snapshots: Snapshots,
     /// The newest `Loadout` line per commander FID, for the route plotter.
     pub loadouts: HashMap<String, Snapshot>,
+    /// Latest friends-list or wing sighting per name, across all commanders.
+    pub friends: BTreeMap<String, FriendSighting>,
     current_fid: Option<String>,
     current_file: Option<PathBuf>,
     offset: u64,
@@ -338,6 +512,15 @@ impl Reader {
                     track.fid = fid.clone();
                     // `Location` is written on every login; skip it when it
                     // repeats the system we are already in.
+                    // Aboard their own carrier as it jumped, or logged in docked on it.
+                    if let Some(carrier) = track.carrier.as_mut().filter(|c| docked_at == Some(c.id)) {
+                        carrier.arrive(CarrierPlace {
+                            timestamp: jump.timestamp.clone(),
+                            system: jump.system.clone(),
+                            id64: jump.id64,
+                            pos: Some(jump.pos),
+                        });
+                    }
                     let repeat = jump.kind == "Location"
                         && track.jumps.last().is_some_and(|last| last.system == jump.system);
                     if !repeat {
@@ -357,6 +540,28 @@ impl Reader {
                     if slot.timestamp.as_str() <= timestamp.as_str() {
                         *slot = Snapshot { timestamp, line: line.into() };
                     }
+                }
+                Some(Event::FriendsSeen { timestamp, names, status }) => {
+                    for name in names {
+                        let slot = self.friends.entry(name).or_default();
+                        if slot.timestamp.as_str() <= timestamp.as_str() {
+                            // A wing sighting keeps the last Friends status:
+                            // it says they're in a wing, not off the list.
+                            *slot = FriendSighting { timestamp: timestamp.clone(), status: status.clone().or(slot.status.take()) };
+                        }
+                    }
+                }
+                Some(Event::Carrier { timestamp, id, update }) => {
+                    // Only the owner writes these, so they belong to whoever is playing.
+                    let Some(fid) = self.current_fid.clone() else { continue };
+                    let track = self.history.commanders.entry(fid.clone()).or_default();
+                    track.fid = fid;
+                    let carrier = track.carrier.get_or_insert_with(Carrier::default);
+                    if carrier.id != id {
+                        // A new carrier (or the first): start afresh.
+                        *carrier = Carrier { id, ..Carrier::default() };
+                    }
+                    carrier.apply(&timestamp, update);
                 }
                 None => {}
             }
@@ -403,6 +608,25 @@ impl JournalSource {
             None => loadouts.values().max_by(|a, b| a.timestamp.cmp(&b.timestamp)),
         })
     }
+
+    /// Names seen on the friends list or in a wing, newest sighting first.
+    /// Leaves out names whose last `Friends` status says they're not a friend
+    /// (`Lost`, `Declined`, `Requested`), and the journals' own commanders.
+    pub fn friend_names(&mut self) -> Result<Vec<String>> {
+        self.history()?;
+        let reader = self.reader.as_ref().unwrap();
+        let own: Vec<String> = reader.history.commanders.values().map(|c| c.name.to_lowercase()).collect();
+        let mut seen: Vec<(&String, &FriendSighting)> = reader
+            .friends
+            .iter()
+            .filter(|(name, s)| {
+                let gone = matches!(s.status.as_deref(), Some("Lost" | "Declined" | "Requested"));
+                !gone && !own.contains(&name.to_lowercase())
+            })
+            .collect();
+        seen.sort_by(|a, b| b.1.timestamp.cmp(&a.1.timestamp).then(a.0.cmp(b.0)));
+        Ok(seen.into_iter().map(|(name, _)| name.clone()).collect())
+    }
 }
 
 impl CommanderSource for JournalSource {
@@ -438,6 +662,42 @@ mod tests {
     const DOCKED: &str = r#"{ "timestamp":"2026-10-01T18:20:00Z", "event":"Docked", "StationName":"Test Port", "StationType":"Coriolis", "StarSystem":"Sagittarius A*", "SystemAddress":20578934, "MarketID":3228100352 }"#;
     const APPROACH: &str = r#"{ "timestamp":"2026-10-01T18:15:00Z", "event":"ApproachSettlement", "Name":"Test Port", "MarketID":3228100352, "SystemAddress":20578934, "BodyID":3, "BodyName":"Sagittarius A* 1" }"#;
     const CARRIER: &str = r#"{ "timestamp":"2026-10-01T19:00:00Z", "event":"CarrierJump", "Docked":true, "StarSystem":"Colonia", "SystemAddress":3238296097059, "StarPos":[-9530.50000,-910.28125,19808.12500] }"#;
+
+    const CARRIER_BUY: &str = r#"{ "timestamp":"2026-10-01T18:30:00Z", "event":"CarrierBuy", "CarrierType":"FleetCarrier", "CarrierID":3708098048, "BoughtAtMarket":3228100352, "Location":"Sagittarius A*", "SystemAddress":20578934, "Price":5000000000, "Variant":"CarrierDockB", "Callsign":"W3H-NVZ" }"#;
+    const CARRIER_STATS: &str = r#"{ "timestamp":"2026-10-01T18:31:00Z", "event":"CarrierStats", "CarrierID":3708098048, "CarrierType":"FleetCarrier", "Callsign":"W3H-NVZ", "Name":"TEST CARRIER", "DockingAccess":"all", "FuelLevel":745, "SpaceUsage":{ "TotalCapacity":25000 }, "Crew":[ { "CrewRole":"Captain", "Activated":true } ] }"#;
+    const SQUADRON_LOCATION: &str = r#"{ "timestamp":"2026-10-01T18:32:00Z", "event":"CarrierLocation", "CarrierType":"SquadronCarrier", "CarrierID":3713195264, "StarSystem":"HIP 49987", "SystemAddress":869521148275, "BodyID":35 }"#;
+    const JUMP_REQUEST: &str = r#"{ "timestamp":"2026-10-01T18:40:00Z", "event":"CarrierJumpRequest", "CarrierType":"FleetCarrier", "CarrierID":3708098048, "SystemName":"Colonia", "Body":"Colonia", "SystemAddress":3238296097059, "BodyID":0, "DepartureTime":"2026-10-01T18:55:00Z" }"#;
+    const OWN_CARRIER_JUMP: &str = r#"{ "timestamp":"2026-10-01T18:56:00Z", "event":"CarrierJump", "Docked":true, "StationName":"W3H-NVZ", "StationType":"FleetCarrier", "MarketID":3708098048, "StarSystem":"Colonia", "SystemAddress":3238296097059, "StarPos":[-9530.50000,-910.28125,19808.12500] }"#;
+
+    #[test]
+    fn follows_the_commanders_own_carrier() {
+        assert_eq!(parse_line(SQUADRON_LOCATION), None, "squadron carriers are left out");
+        let dir = std::env::temp_dir().join(format!("sc-journal-carrier-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Journal.2026-10-01T180000.01.log");
+        let mut f = File::create(&path).unwrap();
+        writeln!(f, "{COMMANDER}\n{LOCATION}\n{CARRIER_BUY}\n{CARRIER_STATS}\n{SQUADRON_LOCATION}\n{JUMP_REQUEST}").unwrap();
+        drop(f);
+        let mut reader = Reader::load_dir(&dir).unwrap();
+        let carrier = reader.history.commanders["F1234"].carrier.clone().unwrap();
+        assert_eq!(carrier.id, 3708098048);
+        assert_eq!(carrier.name.as_deref(), Some("TEST CARRIER"));
+        assert_eq!(carrier.callsign.as_deref(), Some("W3H-NVZ"));
+        assert_eq!(carrier.at.as_ref().map(|p| p.system.as_str()), Some("Sagittarius A*"));
+        let jump = carrier.jump.as_ref().unwrap();
+        assert_eq!((jump.to.system.as_str(), jump.departure.as_str()), ("Colonia", "2026-10-01T18:55:00Z"));
+
+        // Riding it through the jump places it, with coordinates, and settles the booking.
+        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(f, "{OWN_CARRIER_JUMP}").unwrap();
+        drop(f);
+        reader.poll(&dir).unwrap();
+        let carrier = reader.history.commanders["F1234"].carrier.clone().unwrap();
+        let at = carrier.at.unwrap();
+        assert_eq!((at.system.as_str(), at.pos), ("Colonia", Some([-9530.5, -910.28125, 19808.125])));
+        assert_eq!(carrier.jump, None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn parses_position_events() {
@@ -557,6 +817,31 @@ mod tests {
         let c = snaps.stations_in(2).next().unwrap();
         assert_eq!(c.docked.as_ref().unwrap().line, "docked in 1");
         assert_eq!(c.docked_arrival.as_ref().unwrap().line, "jumped to 2");
+    }
+
+    #[test]
+    fn collects_friend_names_for_suggestions() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut f = File::create(dir.path().join("Journal.2026-10-01T180000.01.log")).unwrap();
+        writeln!(f, "{COMMANDER}").unwrap();
+        writeln!(f, r#"{{ "timestamp":"2026-10-01T18:01:00Z", "event":"Friends", "Status":"Online", "Name":"Alice" }}"#).unwrap();
+        writeln!(f, r#"{{ "timestamp":"2026-10-01T18:02:00Z", "event":"Friends", "Status":"Lost", "Name":"Bob" }}"#).unwrap();
+        writeln!(f, r#"{{ "timestamp":"2026-10-01T18:03:00Z", "event":"WingAdd", "Name":"Carol" }}"#).unwrap();
+        writeln!(f, r#"{{ "timestamp":"2026-10-01T18:04:00Z", "event":"WingJoin", "Others":["Dave", {{"Name":"Erin"}}] }}"#).unwrap();
+        // Our own commander coming online on a friend's list must not suggest ourselves.
+        writeln!(f, r#"{{ "timestamp":"2026-10-01T18:05:00Z", "event":"Friends", "Status":"Online", "Name":"Test Pilot" }}"#).unwrap();
+        // A wing sighting after "Lost" doesn't make Bob a friend again...
+        writeln!(f, r#"{{ "timestamp":"2026-10-01T18:06:00Z", "event":"WingAdd", "Name":"Bob" }}"#).unwrap();
+        f.flush().unwrap();
+
+        let mut source = JournalSource::new(dir.path().to_path_buf());
+        assert_eq!(source.friend_names().unwrap(), ["Dave", "Erin", "Carol", "Alice"]);
+
+        // ...but being re-added does.
+        writeln!(f, r#"{{ "timestamp":"2026-10-01T18:07:00Z", "event":"Friends", "Status":"Added", "Name":"Bob" }}"#).unwrap();
+        f.flush().unwrap();
+        source.poll().unwrap();
+        assert_eq!(source.friend_names().unwrap(), ["Bob", "Dave", "Erin", "Carol", "Alice"]);
     }
 
     #[test]

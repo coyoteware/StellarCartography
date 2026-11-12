@@ -26,10 +26,11 @@
           </div>
           <button id="open-settings" type="button" class="quiet push" title="Settings">Settings</button>
         </div>
-        <div class="buttons">
-          <div class="segs" role="group" aria-label="Jump to our systems">
-            <button id="go-home" type="button" title="Synuefe GN-I c26-9, our home system">Home</button>
-            <button id="go-squadron" type="button" title="HIP 49987, the squadron capital">Squadron</button>
+        <!-- Systems the user marked in their details (ui/bookmarks.ts); hidden until one is. -->
+        <div class="buttons" id="bookmark-buttons" hidden>
+          <div class="segs" role="group" aria-label="Jump to your systems">
+            <button id="go-home" type="button" hidden>Home</button>
+            <button id="go-squadron" type="button" hidden>Squadron</button>
           </div>
         </div>
       </div>
@@ -49,7 +50,8 @@
         <label><input type="checkbox" id="layer-route" checked /> Travel history</label>
         <label><input type="checkbox" id="layer-plot" checked /> Plotted route</label>
         <label><input type="checkbox" id="layer-poi" checked /> Points of interest</label>
-        <label><input type="checkbox" id="layer-backdrop" checked /> Distant galaxies</label>
+        <label><input type="checkbox" id="layer-friends" checked /> Friends</label>
+        <label><input type="checkbox" id="layer-sky" checked /> Distant galaxies</label>
         <div id="overlay">
           <label class="overlay-pick">
             Colour systems by
@@ -168,6 +170,27 @@
         </div>
       </section>
       <section>
+        <h2>Jump buttons</h2>
+        <!-- One name field per button (ui/settings.ts); both suggest from this list. -->
+        <datalist id="bookmark-systems"></datalist>
+        <div class="bookmark-line">
+          <label for="set-bookmark-home">Home</label>
+          <input id="set-bookmark-home" type="text" list="bookmark-systems" placeholder="System name" autocomplete="off" spellcheck="false" />
+          <button id="set-bookmark-home-clear" type="button">Clear</button>
+        </div>
+        <p id="set-bookmark-home-problem" class="problem small" hidden></p>
+        <div class="bookmark-line">
+          <label for="set-bookmark-squadron">Squadron capital</label>
+          <input id="set-bookmark-squadron" type="text" list="bookmark-systems" placeholder="System name" autocomplete="off" spellcheck="false" />
+          <button id="set-bookmark-squadron-clear" type="button">Clear</button>
+        </div>
+        <p id="set-bookmark-squadron-problem" class="problem small" hidden></p>
+        <p class="muted small">
+          The Home and Squadron buttons under the search box fly to these systems. Type a name and pick it from the
+          list. Each button shows once it has a system.
+        </p>
+      </section>
+      <section>
         <h2>System details</h2>
         <label class="row">
           Look systems up on
@@ -181,6 +204,28 @@
           Clicking a star shows its factions, Powerplay and stations. Systems you've visited use your journal; others
           are looked up online, falling back to the other site if the first is down. Spansh has Powerplay and landing
           pads, EDSM doesn't. Answers are cached for an hour.
+        </p>
+      </section>
+      <section>
+        <h2>Friends</h2>
+        <ul id="set-friends-list" class="friends-list"></ul>
+        <div class="buttons">
+          <input
+            id="set-friend-name"
+            type="text"
+            list="friend-suggestions"
+            placeholder="Commander name"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <datalist id="friend-suggestions"></datalist>
+          <button id="set-friend-add" type="button">Add</button>
+        </div>
+        <p class="muted small">
+          Marks each commander's last known position on the map (Layers → Friends), from EDSM. Only commanders who
+          upload their journals to EDSM (with EDMC or similar) and leave their flight log public can be found, and a
+          position is only as fresh as their last upload. Names seen on your in-game friends list are suggested as
+          you type.
         </p>
       </section>
       <section>
