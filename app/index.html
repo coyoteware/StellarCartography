@@ -169,19 +169,23 @@
       </section>
       <section>
         <h2>Jump buttons</h2>
+        <!-- One name field per button (ui/settings.ts); both suggest from this list. -->
+        <datalist id="bookmark-systems"></datalist>
         <div class="bookmark-line">
-          Home
-          <span id="set-bookmark-home"></span>
+          <label for="set-bookmark-home">Home</label>
+          <input id="set-bookmark-home" type="text" list="bookmark-systems" placeholder="System name" autocomplete="off" spellcheck="false" />
           <button id="set-bookmark-home-clear" type="button">Clear</button>
         </div>
+        <p id="set-bookmark-home-problem" class="problem small" hidden></p>
         <div class="bookmark-line">
-          Squadron capital
-          <span id="set-bookmark-squadron"></span>
+          <label for="set-bookmark-squadron">Squadron capital</label>
+          <input id="set-bookmark-squadron" type="text" list="bookmark-systems" placeholder="System name" autocomplete="off" spellcheck="false" />
           <button id="set-bookmark-squadron-clear" type="button">Clear</button>
         </div>
+        <p id="set-bookmark-squadron-problem" class="problem small" hidden></p>
         <p class="muted small">
-          Home and Squadron under the search box fly to systems of your choosing. Click a star or search for a system,
-          then press Home or Squadron next to "Mark as" in its details. Each button shows once it has a system.
+          The Home and Squadron buttons under the search box fly to these systems. Type a name and pick it from the
+          list. Each button shows once it has a system.
         </p>
       </section>
       <section>

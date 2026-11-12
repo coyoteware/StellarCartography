@@ -96,7 +96,6 @@ const systemPanel = new SystemPanel($("info-panel"), {
   commanderPos: () => commander.current()?.pos,
   visited: (id64) => visitedById.get(id64),
   places: (id64, name) => places.inSystem(id64, name),
-  bookmarks,
   onClose: () => {
     selectionSeq++;
     selection.set(null);
@@ -161,7 +160,6 @@ overlay.onStatus = () => settingsPanel.renderPopulated();
 places.onStatus = () => settingsPanel.renderPoi();
 bookmarks.onChange = () => {
   renderBookmarkButtons();
-  systemPanel.syncBookmarks();
   settingsPanel.renderBookmarks();
 };
 
@@ -429,8 +427,9 @@ const goBookmark = (slot: Bookmark) => {
   const system = bookmarks.system(slot);
   if (system) return select(system, true);
   // The button only shows once there is one; the key is always there.
-  toasts.show(`There's no ${BOOKMARK_NAMES[slot].long} yet. Pick a system, then mark it in its details.`, "info", {
+  toasts.show(`There's no ${BOOKMARK_NAMES[slot]} yet. Choose one in Settings → Jump buttons.`, "info", {
     timeout: 6,
+    action: openSettings,
   });
 };
 const goHome = () => goBookmark("home");
@@ -442,7 +441,7 @@ function renderBookmarkButtons(): void {
     const system = bookmarks.get(slot);
     const button = $(`go-${slot}`);
     button.hidden = !system;
-    button.title = system ? `${system.name}, your ${BOOKMARK_NAMES[slot].long}` : "";
+    button.title = system ? `${system.name}, your ${BOOKMARK_NAMES[slot]}` : "";
   }
   $("bookmark-buttons").hidden = BOOKMARKS.every((slot) => !bookmarks.get(slot));
 }

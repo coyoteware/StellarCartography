@@ -159,6 +159,7 @@ body {
 
 #search,
 input[type="search"],
+.bookmark-line input,
 select {
   width: 100%;
   height: 28px;
@@ -172,6 +173,7 @@ select {
 
 #search:focus,
 input[type="search"]:focus,
+.bookmark-line input:focus,
 select:focus {
   border-color: var(--accent);
 }
@@ -890,22 +892,6 @@ ul.faction-results {
   overflow-wrap: anywhere;
 }
 
-/* "Mark as" Home / Squadron, under the system's rows. */
-#info-panel .bookmark-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: var(--space-3);
-  margin-top: var(--space-3);
-}
-
-#info-panel .bookmark-row .label {
-  font: var(--label);
-  letter-spacing: var(--label-tracking);
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
 #info-panel ul {
   list-style: none;
   margin: 0;
@@ -1309,19 +1295,22 @@ label.row {
   margin: var(--space-2) 0;
 }
 
-/* Settings → Jump buttons: what it's for, the system, and Clear. */
+/* Settings → Jump buttons: which button, its system's name, and Clear. */
 .bookmark-line {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  min-height: 28px;
   margin: var(--space-2) 0;
 }
 
-.bookmark-line > span {
-  margin-left: auto;
-  overflow-wrap: anywhere;
-  text-align: right;
+.bookmark-line label {
+  flex: none;
+  width: 9em;
+}
+
+.bookmark-line input {
+  flex: 1;
+  min-width: 0;
 }
 
 .range {
@@ -1560,8 +1549,7 @@ button.key-slot.listening:hover {
   margin-top: var(--space-3);
 }
 
-.route-modes button[aria-pressed="true"],
-.bookmark-toggles button[aria-pressed="true"] {
+.route-modes button[aria-pressed="true"] {
   border-color: var(--tone);
   background: var(--tone);
   color: var(--text-on-block);

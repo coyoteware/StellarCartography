@@ -7,12 +7,14 @@ import {
   datasetInfo,
   getSettings,
   pickFolder,
+  searchSystems,
   setDetailsSource,
   setUpdateReminders,
   setJournalDir,
   useDataDir,
   type DataStatus,
   type DirOrigin,
+  type Bookmark,
   type OnlineSource,
   type Settings,
   type ViewSettings,
@@ -55,6 +57,8 @@ export interface SettingsDeps {
 export class SettingsPanel {
   private readonly el = $("settings");
   private settings: Settings | null = null;
+  private suggestTimer = 0;
+  private suggestSeq = 0;
 
   constructor(private readonly deps: SettingsDeps) {
     $("set-populated-size").textContent = DOWNLOAD_SIZES.populated;
@@ -115,9 +119,7 @@ export class SettingsPanel {
     $("set-journal-change").addEventListener("click", () => void this.changeJournalDir());
     $("set-journal-reset").addEventListener("click", () => void this.applyJournalDir(null));
 
-    for (const slot of BOOKMARKS) {
-      $(`set-bookmark-${slot}-clear`).addEventListener("click", () => void this.deps.bookmarks.set(slot, null));
-    }
+    for (const slot of BOOKMARKS) this.bookmarkField(slot);
 
     const budget = $<HTMLSelectElement>("set-budget");
     budget.addEventListener("change", () => this.deps.onView({ ...this.deps.view(), pointBudget: Number(budget.value) }));
@@ -151,19 +153,19 @@ export class SettingsPanel {
 
   close(): void {
     this.el.hidden = true;
+    for (const slot of BOOKMARKS) $(`set-bookmark-${slot}-problem`).hidden = true;
     $("set-rebuild-confirm").hidden = true;
     $("set-populated-confirm").hidden = true;
     $("set-poi-confirm").hidden = true;
   }
 
-  /** Refreshes the jump-button systems (marked or cleared elsewhere meanwhile). */
+  /** Shows the systems behind the jump buttons (leaving a field being typed in alone). */
   renderBookmarks(): void {
     if (this.el.hidden) return;
     for (const slot of BOOKMARKS) {
       const system = this.deps.bookmarks.get(slot);
-      const name = $(`set-bookmark-${slot}`);
-      name.textContent = system?.name ?? "Not set";
-      name.classList.toggle("muted", !system);
+      const input = $<HTMLInputElement>(`set-bookmark-${slot}`);
+      if (document.activeElement !== input) input.value = system?.name ?? "";
       $(`set-bookmark-${slot}-clear`).hidden = !system;
     }
   }
@@ -219,6 +221,70 @@ export class SettingsPanel {
     const view = this.deps.view();
     $<HTMLSelectElement>("set-budget").value = String(view.pointBudget);
     $<HTMLInputElement>("set-exposure").value = String(Math.log2(view.exposure));
+  }
+
+  /**
+   * A jump button's name field: suggests catalogue systems as you type, and
+   * saves once a name is picked from the list or typed out and confirmed
+   * (Enter, or leaving the field). Emptying it clears the button.
+   */
+  private bookmarkField(slot: Bookmark): void {
+    const input = $<HTMLInputElement>(`set-bookmark-${slot}`);
+    const problem = $(`set-bookmark-${slot}-problem`);
+    const list = $("bookmark-systems");
+    let saving: string | null = null;
+
+    const commit = async () => {
+      const name = input.value.trim();
+      const saved = this.deps.bookmarks.get(slot);
+      if (name.toLowerCase() === (saved?.name.toLowerCase() ?? "") || name === saving) return;
+      problem.hidden = true;
+      saving = name;
+      try {
+        if (!name) return await this.deps.bookmarks.set(slot, null);
+        const found = await searchSystems(name).catch(() => []);
+        // Cleared or retyped while it looked: that wins.
+        if (input.value.trim() !== name) return;
+        const system = found.find((s) => s.name.toLowerCase() === name.toLowerCase());
+        if (!system) {
+          problem.textContent = `There's no system called "${name}" in the catalogue.`;
+          problem.hidden = false;
+          return;
+        }
+        await this.deps.bookmarks.set(slot, system);
+        // The catalogue's spelling, unless they've moved on to typing something else.
+        if (input.value.trim() === name) input.value = system.name;
+      } finally {
+        saving = null;
+      }
+    };
+
+    input.addEventListener("input", (e) => {
+      problem.hidden = true;
+      // Picking from the list replaces the text in one go: take it straight away.
+      if (!(e instanceof InputEvent) || e.inputType === "insertReplacementText") return void commit();
+      window.clearTimeout(this.suggestTimer);
+      this.suggestTimer = window.setTimeout(async () => {
+        const query = input.value.trim();
+        if (query.length < 2) return;
+        const mine = ++this.suggestSeq;
+        const found = await searchSystems(query).catch(() => []);
+        if (mine !== this.suggestSeq) return;
+        list.replaceChildren(
+          ...found.slice(0, 10).map((s) => {
+            const option = document.createElement("option");
+            option.value = s.name;
+            return option;
+          }),
+        );
+      }, 150);
+    });
+    input.addEventListener("change", () => void commit());
+    $(`set-bookmark-${slot}-clear`).addEventListener("click", () => {
+      input.value = "";
+      problem.hidden = true;
+      void this.deps.bookmarks.set(slot, null);
+    });
   }
 
   private async changeDataDir(): Promise<void> {

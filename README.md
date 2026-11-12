@@ -175,11 +175,12 @@ in `%LOCALAPPDATA%\io.github.stellarcartography.viewer\details-cache.sqlite`.
 Settings → System details switches the online source, or turns lookups off
 (journal only).
 
-"Mark as" Home or Squadron, under the system's coordinates, puts the system
-behind the Home or Squadron button under the search box (and keys 4 and 5).
-Each button shows once it has a system; press the lit toggle again, or Clear in
-Settings → Jump buttons, to take it away. The choice is saved in settings.json
-under `homeSystem` and `squadronSystem`.
+## Jump buttons
+
+Home and Squadron, under the search box (keys 4 and 5), fly to systems you
+choose in Settings → Jump buttons: type a name and pick it from the list. Each
+button shows once it has a system; Clear hides it again. The choice is saved
+in settings.json under `homeSystem` and `squadronSystem`.
 
 ## Build the galaxy data from the command line
 

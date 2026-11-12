@@ -1,25 +1,17 @@
 // The Home and Squadron jump buttons: which system each goes to. The user
-// marks a system from its details; the choice is kept in settings.json, and a
-// button with nothing behind it stays hidden.
+// picks them in Settings → Jump buttons; the choice is kept in settings.json,
+// and a button with nothing behind it stays hidden.
 
 import { setBookmark, type Bookmark, type SavedSystem, type Settings, type SystemInfo } from "../api";
 import { errorText, type Toasts } from "./toast";
 
 export const BOOKMARKS: readonly Bookmark[] = ["home", "squadron"];
 
-/** What each is called: on its button, and in a sentence. */
-export const BOOKMARK_NAMES: Record<Bookmark, { button: string; long: string }> = {
-  home: { button: "Home", long: "home system" },
-  squadron: { button: "Squadron", long: "squadron capital" },
+/** What each is called in a sentence. */
+export const BOOKMARK_NAMES: Record<Bookmark, string> = {
+  home: "home system",
+  squadron: "squadron capital",
 };
-
-type Named = { id64: string | null; name: string };
-
-/** The same system: by id64 where both have one, otherwise by name. */
-export function sameSystem(a: Named, b: Named): boolean {
-  if (a.id64 && b.id64) return a.id64 === b.id64;
-  return a.name.toLowerCase() === b.name.toLowerCase();
-}
 
 export class Bookmarks {
   private readonly saved: Record<Bookmark, SavedSystem | null> = { home: null, squadron: null };
@@ -45,16 +37,10 @@ export class Bookmarks {
     return s ? { rowid: null, ...s } : null;
   }
 
-  /** Whether `system` is the one behind `slot`. */
-  is(slot: Bookmark, system: Named): boolean {
-    const s = this.saved[slot];
-    return !!s && sameSystem(s, system);
-  }
-
   /** Saves `system` behind `slot` (null clears it) and says what changed. */
   async set(slot: Bookmark, system: SystemInfo | null): Promise<void> {
     const next: SavedSystem | null = system && { id64: system.id64, name: system.name, pos: [...system.pos] };
-    const { long } = BOOKMARK_NAMES[slot];
+    const long = BOOKMARK_NAMES[slot];
     try {
       await setBookmark(slot, next);
     } catch (e) {
