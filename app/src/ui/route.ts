@@ -156,6 +156,12 @@ export class RouteUi {
     this.renderParams();
   }
 
+  /** Reads the ship again: the commander changed, or may have changed ships. */
+  async refreshShip(): Promise<void> {
+    await this.loadShip();
+    this.renderParams();
+  }
+
   private async loadShip(): Promise<void> {
     try {
       this.ship = await shipLoadout(this.deps.fid());
@@ -187,10 +193,19 @@ export class RouteUi {
 
   /** A journal jump arrived: advance along the route if it reached a waypoint. */
   onJump(jump: Jump): void {
+    this.advance(jump.system, jump.id64);
+  }
+
+  /** The commander's own carrier is at `system`: a carrier route follows it, whoever is aboard. */
+  onCarrierAt(system: string, id64: string | null): void {
+    if (this.saved?.route.mode === "carrier") this.advance(system, id64);
+  }
+
+  private advance(system: string, id64: string | null): void {
     const saved = this.saved;
     if (!saved || this.plotting) return;
     const { waypoints } = saved.route;
-    const matches = (w: Waypoint) => (jump.id64 && w.id64 === jump.id64) || w.name.toLowerCase() === jump.system.toLowerCase();
+    const matches = (w: Waypoint) => (id64 && w.id64 === id64) || w.name.toLowerCase() === system.toLowerCase();
     let reached = -1;
     for (let i = saved.progress + 1; i < waypoints.length; i++) {
       if (matches(waypoints[i])) {
@@ -211,7 +226,7 @@ export class RouteUi {
     }
     if (saved.copyNext) {
       void copyText(next.name);
-      this.deps.toasts.show(`Waypoint ${reached + 1} of ${waypoints.length - 1} · next: ${next.name} (copied)`, "info", { timeout: 6 });
+      this.deps.toasts.show(`Waypoint ${reached + 1} of ${waypoints.length} · next: ${next.name} (copied)`, "info", { timeout: 6 });
     }
   }
 
@@ -229,6 +244,7 @@ export class RouteUi {
     if (open) {
       if (!this.from.value) this.fillCurrent(false);
       this.renderResult();
+      void this.refreshShip();
     }
   }
 
@@ -277,6 +293,7 @@ export class RouteUi {
           this.mode = m.id;
           this.renderModes();
           this.renderParams();
+          if (m.id === "galaxy") void this.refreshShip();
         });
         b.title = m.hint;
         b.setAttribute("aria-pressed", String(m.id === this.mode));
@@ -375,6 +392,11 @@ export class RouteUi {
 
   private async plot(): Promise<void> {
     if (this.plotting) return;
+    // The ship as the journals have it now, not as they had it at startup.
+    if (this.mode === "galaxy") {
+      await this.refreshShip();
+      if (this.plotting) return;
+    }
     const request = this.request();
     if (typeof request === "string") {
       this.deps.toasts.error(request, { timeout: 6 });
@@ -394,7 +416,8 @@ export class RouteUi {
       this.persist();
       this.show();
     } catch (e) {
-      if (!String(e).includes("cancelled")) {
+      // The backend's own word for a plot superseded or cancelled (routes.rs).
+      if (String(e) !== "cancelled") {
         this.deps.toasts.error(`Couldn't plot the route: ${errorText(e)}`, { timeout: 10 });
       }
     } finally {

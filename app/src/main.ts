@@ -254,6 +254,7 @@ function applyDimming(): void {
 
 /** Applies display preferences to the scene and (debounced) saves them. */
 function applyView(next: ViewSettings, persist = true): void {
+  const friendsShown = viewSettings.friends;
   viewSettings = next;
   view.exposure = next.exposure;
   if (cloud) {
@@ -266,6 +267,8 @@ function applyView(next: ViewSettings, persist = true): void {
   commander.object.visible = next.route;
   plot.object.visible = next.plot;
   friends.visible = next.friends;
+  // Friends aren't looked up while hidden (see boot): catch up on showing them.
+  if (next.friends && !friendsShown) void refreshFriends();
   showRegions(next.regions);
   $<HTMLInputElement>("layer-glow").checked = next.glow;
   $<HTMLInputElement>("layer-stars").checked = next.stars;
@@ -390,6 +393,8 @@ function setCommander(fid: string): void {
   commander.setTrack(track);
   updateLocation();
   showCarrier();
+  // The route planner's ship is this commander's.
+  void routeUi.refreshShip();
   view.wake();
 }
 
@@ -431,7 +436,22 @@ function addCommanderOption(fid: string, name: string, jumps: number): void {
 }
 
 async function loadCommander(): Promise<void> {
-  commanders = await commanderHistory();
+  // Listening before the snapshot is taken, or a carrier change sent while it
+  // loads would be lost: the watcher sends each change once. Those that come
+  // in meanwhile are applied over the snapshot, in order; each is the whole
+  // carrier, and the last is never older than the snapshot.
+  let early: [string, Carrier | null][] | null = [];
+  await onCommanderCarrier((fid, carrier) => {
+    if (early) early.push([fid, carrier]);
+    else applyCarrier(fid, carrier);
+  });
+  try {
+    commanders = await commanderHistory();
+  } finally {
+    const pending = early ?? [];
+    early = null;
+    for (const [fid, carrier] of pending) applyCarrier(fid, carrier);
+  }
   const panel = $("commander");
   const picker = $<HTMLSelectElement>("commander-select");
   const location = $("commander-location");
@@ -475,21 +495,21 @@ async function loadCommander(): Promise<void> {
         selectedFid = fid;
       }
     }
-    track.jumps.push(jump);
+    // The journal's own record of a carrier jump that followCarrier already
+    // made at its departure takes that one's place.
+    const last = track.jumps[track.jumps.length - 1];
+    const replaces = last?.kind === "CarrierLocation" && last.system === jump.system;
+    if (replaces) track.jumps[track.jumps.length - 1] = jump;
+    else track.jumps.push(jump);
     // The journal now has a fresh snapshot of that system.
     systemPanel.refreshIfShowing(jump.id64);
     if (fid === selectedFid) {
-      commander.addJump(jump);
+      if (replaces) commander.setTrack(track);
+      else commander.addJump(jump);
       routeUi.onJump(jump);
       updateLocation();
       view.wake();
     }
-  });
-  await onCommanderCarrier((fid, carrier) => {
-    const track = commanders?.commanders.find((c) => c.fid === fid);
-    if (!track) return;
-    track.carrier = carrier;
-    if (fid === selectedFid) showCarrier();
   });
 }
 
@@ -497,8 +517,17 @@ async function loadCommander(): Promise<void> {
 
 let carrierTimer = 0;
 
-/** Where a carrier is now: at a booked jump's destination once it has departed. */
+/** A commander's carrier changed (or went: null). */
+function applyCarrier(fid: string, carrier: Carrier | null): void {
+  const track = commanders?.commanders.find((c) => c.fid === fid);
+  if (!track) return;
+  track.carrier = carrier;
+  if (fid === selectedFid) showCarrier();
+}
+
+/** Where a carrier is now: at a booked jump's destination once it has departed; nowhere once scrapped. */
 function carrierNow(c: Carrier): CarrierPlace | null {
+  if (c.scrappedAt && Date.parse(c.scrappedAt) <= Date.now()) return null;
   if (c.jump && Date.parse(c.jump.departure) <= Date.now()) return c.jump.to;
   return c.at;
 }
@@ -511,8 +540,10 @@ function showCarrier(): void {
   const place = c ? carrierNow(c) : null;
   carrierPin.set(c && place?.pos ? [{ pos: place.pos, label: c.name ?? c.callsign ?? "Carrier", carrier: c, place }] : []);
   if (track && c?.aboard && place) followCarrier(track, place);
-  const wait = c?.jump ? Date.parse(c.jump.departure) - Date.now() : NaN;
-  if (wait > 0) carrierTimer = window.setTimeout(showCarrier, Math.min(wait + 1000, 2 ** 31 - 1));
+  if (place) routeUi.onCarrierAt(place.system, place.id64);
+  // Again when a booked jump departs or the carrier is scrapped, whichever comes first.
+  const waits = [c?.jump?.departure, c?.scrappedAt].map((t) => (t ? Date.parse(t) - Date.now() : NaN)).filter((w) => w > 0);
+  if (waits.length) carrierTimer = window.setTimeout(showCarrier, Math.min(Math.min(...waits) + 1000, 2 ** 31 - 1));
   view.wake();
 }
 
@@ -1023,8 +1054,11 @@ async function boot(): Promise<void> {
   }
   // After the commander, so the saved route and ship know who's flying.
   void routeUi.load();
-  void refreshFriends();
-  window.setInterval(() => void refreshFriends(), FRIEND_POLL_MS);
+  // Only while they're drawn: turning the layer on looks them up again (applyView).
+  if (viewSettings.friends) void refreshFriends();
+  window.setInterval(() => {
+    if (viewSettings.friends) void refreshFriends();
+  }, FRIEND_POLL_MS);
   await galaxy;
 }
 

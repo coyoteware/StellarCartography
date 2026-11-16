@@ -158,7 +158,8 @@ export interface Carrier {
   /** A jump booked since: from `departure` (ISO, UTC) on it's at `to`. */
   jump: { timestamp: string; departure: string; to: CarrierPlace } | null;
   /** The commander is docked aboard it, as of their latest journal event, so goes where it goes. */
-  aboard: boolean;
+  aboard: boolean;  /** Being decommissioned: gone from this time on (ISO, UTC). */
+  scrappedAt: string | null;
 }
 
 export interface CommanderPayload {

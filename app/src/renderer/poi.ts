@@ -121,15 +121,6 @@ const fragmentShader = /* glsl */ `
       float slots = min(sdRect(q, vec2(3.1, 5.0), vec2(4.0, 11.0)), sdRect(q, vec2(11.6, 5.0), vec2(12.5, 11.0)));
       return max(min(spine, block), -slots);
     }
-    if (s == ${SHAPES.cruiser}) {
-      float d = sdHull(q, 0.4, 13.2, 15.6, 8.0, 1.1);
-      for (int i = 0; i < 3; i++) {
-        float x = 2.6 + 3.8 * float(i);
-        d = min(d, sdRect(q, vec2(x, 3.6), vec2(x + 3.0, 6.5)));
-        d = min(d, sdRect(q, vec2(x, 9.5), vec2(x + 3.0, 12.4)));
-      }
-      return d;
-    }
     if (s == ${SHAPES.carrier}) {
       float hull = min(sdHull(q, 2.0, 11.2, 15.6, 8.0, 2.8), sdRect(q, vec2(0.4, 3.4), vec2(3.0, 12.6)));
       return max(hull, -sdRect(q, vec2(5.4, 6.4), vec2(8.6, 9.6)));

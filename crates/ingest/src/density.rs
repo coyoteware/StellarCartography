@@ -135,11 +135,13 @@ impl Accumulator {
         Ok(())
     }
 
-    /// Each logged boxel: mass code, centre, and estimated systems.
-    fn samples(&self) -> impl Iterator<Item = (usize, [f32; 3], f64)> + '_ {
-        self.boxels.iter().map(|&v| {
+    /// Each logged boxel of mass code `code`: centre, and estimated systems.
+    /// The mass code is the id64's low bits, so the others are skipped
+    /// without decoding them.
+    fn samples(&self, code: u64) -> impl Iterator<Item = ([f32; 3], f64)> + '_ {
+        self.boxels.iter().filter(move |&&v| v & 7 == code).map(|&v| {
             let id = Id64::decode(v & SYSTEM_BITS);
-            (usize::from(id.mass_code), id.boxel_centre(), german_tank(id.system_index, v >> 55))
+            (id.boxel_centre(), german_tank(id.system_index, v >> 55))
         })
     }
 
@@ -148,14 +150,20 @@ impl Accumulator {
         let n = MAP_SIZE * MAP_SIZE;
         let mut total = vec![0f32; n];
         let mut code_b = Vec::new();
+        let near_sol = |c: &[f32; 3]| c.iter().map(|c| c * c).sum::<f32>() < CALIBRATION_RADIUS * CALIBRATION_RADIUS;
+        // Mass code a's share of b is measured around Sol: b while it's read here.
+        let (mut a, mut b) = (0.0, 0.0);
         for code in 1..8 {
             let size = 10.0 * (1u32 << code) as f32;
             let mut grids = Grids::new();
             let mut any = false;
-            for (_, centre, count) in self.samples().filter(|s| s.0 == code) {
+            for (centre, count) in self.samples(code) {
                 let profile = mean_profile(centre[1], size, scale_height(core_distance(centre[0], centre[2])));
                 grids.add(centre, size, count as f32, profile.max(MIN_PROFILE));
                 any = true;
+                if code == 1 && near_sol(&centre) {
+                    b += count;
+                }
             }
             if !any {
                 continue;
@@ -169,14 +177,9 @@ impl Accumulator {
             }
         }
         // Mass code a, as a share of b measured around Sol.
-        let (mut a, mut b) = (0.0, 0.0);
-        for (code, centre, count) in self.samples().filter(|s| s.0 <= 1) {
-            if centre.iter().map(|c| c * c).sum::<f32>() < CALIBRATION_RADIUS * CALIBRATION_RADIUS {
-                if code == 0 {
-                    a += count;
-                } else {
-                    b += count;
-                }
+        for (centre, count) in self.samples(0) {
+            if near_sol(&centre) {
+                a += count;
             }
         }
         if b > 0.0 {
