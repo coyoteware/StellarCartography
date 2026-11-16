@@ -31,7 +31,7 @@ const LABEL_FONT_PX = 11;
  * does no colour management, and THREE.Color would hand it linear values: the
  * glyphs came out #e2d2af and the accent #ff5207.
  */
-function srgb(hex: string): THREE.Vector3 {
+export function srgb(hex: string): THREE.Vector3 {
   const n = parseInt(hex.slice(1), 16);
   return new THREE.Vector3(n >> 16, (n >> 8) & 255, n & 255).divideScalar(255);
 }

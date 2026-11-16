@@ -625,6 +625,11 @@ ul.friends-list {
   color: var(--text-muted);
 }
 
+/* An option of the layer above it, shown while that layer is on. */
+#layers-panel > label.sub-layer {
+  padding-left: var(--space-6);
+}
+
 /* --- Overlay layers: picker and legend ------------------------------------ */
 
 #overlay {

@@ -5,7 +5,7 @@ const BYTES_PER_POINT = 11; // tile layout: u32 rowid + 3x u16 position + u8 mas
 
 const m = (n: number) => (n / 1e6).toFixed(2) + "M";
 
-/** Bottom-left readout: frame rate, LOD stats, camera target. */
+/** Bottom-left readout: frame rate, LOD stats, camera target and the region it's in. */
 export class Hud {
   private fps = 60;
   private lastText = 0;
@@ -20,6 +20,7 @@ export class Hud {
     totalPoints: number,
     target: Vec3,
     distance: number,
+    region: string | null,
   ): void {
     if (dt > 0) this.fps = this.fps * 0.9 + (1 / dt) * 0.1;
     if (now - this.lastText < 0.25) return;
@@ -34,6 +35,7 @@ export class Hud {
       );
     }
     lines.push(`target  ${target.map((v) => v.toFixed(0)).join(", ")}  ·  range ${distance.toFixed(0)} ly`);
+    if (region) lines.push(`region  ${region}`);
     this.el.textContent = lines.join("\n");
   }
 }
