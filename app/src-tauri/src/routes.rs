@@ -229,15 +229,15 @@ impl Plotter {
                 bail!("cancelled");
             }
             let reply = self.send(self.client.get(format!("{API}/results/{job}"))).await?;
-            match reply {
-                JobReply { error: Some(e), .. } => bail!("Spansh: {e}"),
-                JobReply { status: Some(s), result: Some(result), .. } if s == "ok" => {
-                    return parse_result(&request, result);
-                }
-                _ if started.elapsed() > TIMEOUT => {
-                    bail!("Spansh is taking too long (the queue may be full); try again later")
-                }
-                _ => {} // still queued
+            // Cancelled while that was on its way: the answer is no longer wanted.
+            if self.generation.load(Ordering::Relaxed) != generation {
+                bail!("cancelled");
+            }
+            if let Some(result) = job_outcome(reply)? {
+                return parse_result(&request, result);
+            }
+            if started.elapsed() > TIMEOUT {
+                bail!("Spansh is taking too long (the queue may be full); try again later")
             }
         }
     }
@@ -265,6 +265,20 @@ impl Plotter {
 }
 
 // --- Result parsing ------------------------------------------------------------
+
+/// What one answer from `api/results` means: the finished route's data, or
+/// `None` while the job is still queued. Any other status ends the job.
+fn job_outcome(reply: JobReply) -> Result<Option<serde_json::Value>> {
+    match reply {
+        JobReply { error: Some(e), .. } => bail!("Spansh: {e}"),
+        JobReply { status: Some(s), result, .. } if s == "ok" => match result {
+            Some(result) => Ok(Some(result)),
+            None => bail!("Spansh finished the job without a route"),
+        },
+        JobReply { status: Some(s), .. } if s != "queued" => bail!("Spansh couldn't plot the route (job {s})"),
+        _ => Ok(None),
+    }
+}
 
 /// An id64, however the plotter spells it (the neutron plotter sends a
 /// number, the others strings).
@@ -462,6 +476,16 @@ mod tests {
         assert!(colonia.destination);
         assert!(colonia.icy_ring && colonia.pristine);
         assert_eq!(colonia.restock, None, "zero restock is no restock");
+    }
+
+    #[test]
+    fn only_queued_jobs_are_waited_for() {
+        let reply = |json: &str| job_outcome(serde_json::from_str(json).unwrap());
+        assert_eq!(reply(r#"{"job":"x","status":"queued"}"#).unwrap(), None);
+        assert_eq!(reply(r#"{"status":"ok","result":{"jumps":[]}}"#).unwrap(), Some(serde_json::json!({"jumps": []})));
+        assert!(reply(r#"{"status":"ok","result":null}"#).is_err(), "done, but no route");
+        assert!(reply(r#"{"status":"failed"}"#).is_err(), "a final status without an error");
+        assert!(reply(r#"{"status":"queued","error":"Could not find system"}"#).is_err());
     }
 
     #[test]

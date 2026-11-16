@@ -32,11 +32,13 @@ permissions:
   contents: read
 
 # A newer push to a branch supersedes its run in progress, except on main,
-# where every commit gets its own installer, and for tags, which are
-# releases.
+# where every commit gets its own installer, for tags, which are releases,
+# and for releases drafted from the Actions tab. Those each get a group of
+# their own: a shared group, even without cancel-in-progress, would still
+# cancel a waiting run when a newer one queued behind it.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
+  group: ci-${{ github.ref }}-${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.release != '')) && github.run_id || 'latest' }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
