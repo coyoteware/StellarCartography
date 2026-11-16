@@ -28,8 +28,11 @@ const Z0 = -24105;
 export const REGION_CELL = 4096 / 83;
 /** Cells along each side. */
 const SIZE = 2048;
-/** Edges are straightened to within this many cells of the grid's (see `trace`). */
-const STRAIGHTEN = 0.6;
+/** Edges are straightened to within this many cells of the grid's (see `trace`)... */
+const STRAIGHTEN = 0.75;
+/** ...then their bends rounded off over at most this many cells either side, this many times. */
+const ROUND_CELLS = 2;
+const ROUNDS = 3;
 
 const ROWS = data.regionmap as [number, number][][];
 
@@ -96,12 +99,17 @@ function decode(): Uint8Array {
 }
 
 /**
- * The edges between regions as straight segments. The grid's edges are
- * staircases of 49 ly steps; drawn as they are, the far-off ones break up
- * into dots (steps shorter than a pixel draw nothing). So each edge between
- * two regions is followed from one junction to the next and straightened
- * (Douglas-Peucker) to within STRAIGHTEN cells, which is within 30 ly of
- * where the game puts it. The map's outer rim isn't an edge.
+ * The edges between regions as smooth lines, in segments. The grid's edges
+ * are staircases of 49 ly steps: far off they break up into dots (steps
+ * shorter than a pixel draw nothing), and close up they're stairs. So each
+ * edge between two regions is followed from one junction to the next through
+ * the middle of each step, where the stairs sit closest to the line they
+ * stand for (a 45° staircase's middles are a straight line). That's
+ * straightened (Douglas-Peucker) to within STRAIGHTEN cells, and the bends
+ * left are rounded off (corner cutting), never by more than ROUND_CELLS
+ * cells, so the arms' big corners stay corners. Junctions stay where they
+ * are, so edges still meet. All of it keeps within about a cell (50 ly) of
+ * where the game puts the edge. The map's outer rim isn't an edge.
  */
 function trace(grid: Uint8Array): Float32Array {
   // Unit edges on the lattice of cell corners, vertex = j * W + i.
@@ -169,11 +177,20 @@ function trace(grid: Uint8Array): Float32Array {
   const zs = (v: number) => Math.floor(v / W);
   const out: number[] = [];
   const emit = (chain: number[]) => {
-    const kept = straighten(chain, xs, zs);
-    for (let k = 1; k < kept.length; k++) {
-      const a = kept[k - 1];
-      const b = kept[k];
-      out.push(X0 + xs(a) * REGION_CELL, Z0 + zs(a) * REGION_CELL, X0 + xs(b) * REGION_CELL, Z0 + zs(b) * REGION_CELL);
+    // The junctions at its ends, and the middle of each step between them (x, z pairs).
+    const line = [xs(chain[0]), zs(chain[0])];
+    for (let k = 1; k < chain.length; k++) {
+      line.push((xs(chain[k - 1]) + xs(chain[k])) / 2, (zs(chain[k - 1]) + zs(chain[k])) / 2);
+    }
+    line.push(xs(chain[chain.length - 1]), zs(chain[chain.length - 1]));
+    const smooth = round(straighten(line));
+    for (let k = 2; k < smooth.length; k += 2) {
+      out.push(
+        X0 + smooth[k - 2] * REGION_CELL,
+        Z0 + smooth[k - 1] * REGION_CELL,
+        X0 + smooth[k] * REGION_CELL,
+        Z0 + smooth[k + 1] * REGION_CELL,
+      );
     }
   };
   for (const chain of chains) {
@@ -194,23 +211,21 @@ function trace(grid: Uint8Array): Float32Array {
   return Float32Array.from(out);
 }
 
-/** Douglas-Peucker: the points of `chain` needed to stay within STRAIGHTEN cells of it. */
-function straighten(chain: number[], xs: (v: number) => number, zs: (v: number) => number): number[] {
-  const keep = new Uint8Array(chain.length);
-  keep[0] = keep[chain.length - 1] = 1;
-  const stack: [number, number][] = [[0, chain.length - 1]];
+/** Douglas-Peucker: the points of a line (x, z pairs) needed to stay within STRAIGHTEN of it. */
+function straighten(line: number[]): number[] {
+  const n = line.length / 2;
+  const keep = new Uint8Array(n);
+  keep[0] = keep[n - 1] = 1;
+  const stack: [number, number][] = [[0, n - 1]];
   while (stack.length) {
     const [a, b] = stack.pop()!;
-    const ax = xs(chain[a]);
-    const az = zs(chain[a]);
-    const dx = xs(chain[b]) - ax;
-    const dz = zs(chain[b]) - az;
+    const [ax, az] = [line[a * 2], line[a * 2 + 1]];
+    const [dx, dz] = [line[b * 2] - ax, line[b * 2 + 1] - az];
     const length = Math.hypot(dx, dz);
     let worst = -1;
     let worstD = STRAIGHTEN;
     for (let k = a + 1; k < b; k++) {
-      const qx = xs(chain[k]) - ax;
-      const qz = zs(chain[k]) - az;
+      const [qx, qz] = [line[k * 2] - ax, line[k * 2 + 1] - az];
       const d = length > 0 ? Math.abs(qx * dz - qz * dx) / length : Math.hypot(qx, qz);
       if (d > worstD) [worst, worstD] = [k, d];
     }
@@ -219,7 +234,30 @@ function straighten(chain: number[], xs: (v: number) => number, zs: (v: number) 
       stack.push([a, worst], [worst, b]);
     }
   }
-  return chain.filter((_, k) => keep[k]);
+  return line.filter((_, k) => keep[k >> 1]);
+}
+
+/**
+ * Rounds a line's bends (x, z pairs) by cutting each corner (Chaikin), a
+ * quarter of the way along each side but never more than ROUND_CELLS, ROUNDS
+ * times over. Its ends stay put.
+ */
+function round(line: number[]): number[] {
+  for (let r = 0; r < ROUNDS; r++) {
+    const n = line.length / 2;
+    if (n < 3) break;
+    const next = [line[0], line[1]];
+    for (let i = 0; i < n - 1; i++) {
+      const [ax, az, bx, bz] = [line[i * 2], line[i * 2 + 1], line[i * 2 + 2], line[i * 2 + 3]];
+      const length = Math.hypot(bx - ax, bz - az);
+      const t = length > 0 ? Math.min(length / 4, ROUND_CELLS) / length : 0;
+      if (i > 0) next.push(ax + (bx - ax) * t, az + (bz - az) * t);
+      if (i < n - 2) next.push(bx - (bx - ax) * t, bz - (bz - az) * t);
+    }
+    next.push(line[n * 2 - 2], line[n * 2 - 1]);
+    line = next;
+  }
+  return line;
 }
 
 /**
@@ -303,11 +341,6 @@ export interface MappedSpot {
   z: number;
   /** How far it is from the outline, ly. */
   room: number;
-  /**
-   * Which way the region runs there, as an angle in the x-z plane (radians
-   * from +x towards +z), or null where it's about as wide as it is long.
-   */
-  along: number | null;
 }
 
 export interface MappedLabel {
@@ -316,8 +349,6 @@ export interface MappedLabel {
   spots: MappedSpot[];
 }
 
-/** A region runs one way when it's this many times longer than it's wide, near a name. */
-const ELONGATED = 1.6;
 /** Other spots for a name are at least this many times the best one's room from each other... */
 const SPOT_APART = 3;
 /** ...and have at least this share of its room. */
@@ -337,8 +368,7 @@ export function mappedLabels(): MappedLabel[] {
  * outline is sampled on a grid; the deepest sample, refined on a finer grid
  * round it, is the best spot. A name there often lands on a codex region's
  * (the two maps often agree), so a few more spots well apart along the region
- * are kept for it to move to. Which way the region runs at each comes from
- * the spread of the samples round it.
+ * are kept for it to move to.
  */
 function placeName(name: string, outline: number[]): MappedLabel {
   let [x0, z0, x1, z1] = [Infinity, Infinity, -Infinity, -Infinity];
@@ -373,35 +403,9 @@ function placeName(name: string, outline: number[]): MappedLabel {
         if (d > best.d) best = { x, z, d };
       }
     }
-    spots.push({ x: best.x, z: best.z, room: best.d, along: runs(samples, best, Math.max(4 * best.d, 2 * step)) });
+    spots.push({ x: best.x, z: best.z, room: best.d });
   }
   return { name, spots };
-}
-
-/**
- * Which way a region runs at a point: the long axis of the spread
- * (covariance) of its samples within `reach`, or null if it isn't clearly
- * longer one way than the other.
- */
-function runs(samples: { x: number; z: number }[], at: { x: number; z: number }, reach: number): number | null {
-  let [n, sx, sz, sxx, szz, sxz] = [0, 0, 0, 0, 0, 0];
-  for (const s of samples) {
-    const [dx, dz] = [s.x - at.x, s.z - at.z];
-    if (dx * dx + dz * dz > reach * reach) continue;
-    n++;
-    sx += dx;
-    sz += dz;
-    sxx += dx * dx;
-    szz += dz * dz;
-    sxz += dx * dz;
-  }
-  if (n < 3) return null;
-  const [mx, mz] = [sx / n, sz / n];
-  const [cxx, czz, cxz] = [sxx / n - mx * mx, szz / n - mz * mz, sxz / n - mx * mz];
-  const mid = (cxx + czz) / 2;
-  const spread = Math.hypot((cxx - czz) / 2, cxz);
-  if (Math.sqrt((mid + spread) / Math.max(mid - spread, 1e-9)) < ELONGATED) return null;
-  return Math.atan2(2 * cxz, cxx - czz) / 2;
 }
 
 /** Even-odd test: is (x, z) inside the outline? */
