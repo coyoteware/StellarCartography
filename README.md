@@ -232,16 +232,21 @@ installed app won't find the repo's `data/` by itself: on first run, choose
 
 ## Tests
 
-The build pipeline runs locally (there is no hosted CI):
+GitHub Actions ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on
+Windows for every push and pull request: a frozen-lockfile install, a
+typecheck and build of the frontend, then clippy and the Rust tests. Pushes to
+`main` also build the installer and attach it to the run as an artifact (kept
+14 days); for any other branch, start the workflow from the Actions tab with
+"Run workflow".
+
+The same pipeline runs locally with
 
 ```bash
 scripts\ci.cmd
 ```
 
-does a frozen-lockfile install, typechecks and builds the frontend, then runs
-clippy and the Rust tests. Add `--installer` to also build the Windows
-installer (`pnpm tauri build`); the setup exe lands in
-`target\release\bundle\nsis\`.
+Add `--installer` to also build the Windows installer (`pnpm tauri build`);
+the setup exe lands in `target\release\bundle\nsis\`.
 
 Individual checks:
 
