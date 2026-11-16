@@ -72,7 +72,16 @@ const friends = new FriendsLayer($("poi-labels"));
 const homePin = new PinSet("home", $("poi-labels"));
 const squadronPin = new PinSet("squadron", $("poi-labels"));
 const carrierPin = new PinSet<PinItem & { carrier: Carrier; place: CarrierPlace }>("carrier", $("poi-labels"));
-view.overlay.add(commander.object, selection.object, plot.object, friends.object, homePin.object, squadronPin.object, carrierPin.object);
+view.overlay.add(
+  commander.object,
+  commander.location,
+  selection.object,
+  plot.object,
+  friends.object,
+  homePin.object,
+  squadronPin.object,
+  carrierPin.object,
+);
 // Needs no data, so the sky is there from the first frame, setup included.
 const sky = new IntergalacticSky();
 view.sky.add(sky.mesh);
@@ -246,9 +255,8 @@ function applyView(next: ViewSettings, persist = true): void {
   }
   if (glow) glow.mesh.visible = next.glow;
   sky.mesh.visible = next.sky;
-  // Your carrier is journal data like your route, so it goes with it.
+  // Only the route and visited systems: your pin and your carrier's always show.
   commander.object.visible = next.route;
-  carrierPin.visible = next.route;
   plot.object.visible = next.plot;
   friends.visible = next.friends;
   $<HTMLInputElement>("layer-glow").checked = next.glow;

@@ -30,8 +30,7 @@
   stats, location at login, jumps booked and cancelled, riding it through a
   jump) place your own carrier as a peach pin labelled with its name; it moves
   when a booked jump departs, and hovering it says where it's jumping next.
-  Squadron carriers are left out. It goes with Layers → Travel history.
-  Docked aboard it, you go where it goes: when it jumps while you're logged
+  Squadron carriers are left out. Docked aboard it, you go where it goes: when it jumps while you're logged
   off (or the game logs only its new location), your position moves with it
   instead of staying where you last were.
 
@@ -44,9 +43,11 @@
   system's colour (accent, ice, lilac, peach) with a pictogram cut out of it,
   standing beside its star and pointing at it. Pins that would overlap stack
   up instead of hiding each other, with you at the bottom. Hover a pin for
-  what it is, click it to select the system. Megaships,
-  the expeditions' carriers (DSSA, OASIS, PIONEER) and carrier hubs are drawn
-  as ships seen from above instead of squares and dots.
+  what it is, click it to select the system. Your pin and your carrier's
+  stay on the map whatever the layers: Layers → Travel history switches only
+  the route and the systems visited. Megaships, the expeditions' carriers
+  (DSSA, OASIS, PIONEER) and carrier hubs are drawn as ships seen from above
+  instead of squares and dots.
 - **The bulge has no hard top and bottom.** Seen side on, the glow's bulge
   ended in a flat edge where the slab it's drawn in stops. The slab is
   taller now and the light fades out before its edge.

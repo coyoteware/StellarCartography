@@ -1,5 +1,6 @@
-// Commander layer: travel route, visited systems and current location (a
-// pin over a pulsing ring).
+// Commander layer: travel route and visited systems (`object`, the Travel
+// history layer), and current location (`location`, a pin over a pulsing
+// ring, shown whatever the layers).
 
 import * as THREE from "three";
 import type { CommanderTrack, Jump, Vec3, VisitedSystem } from "../api";
@@ -47,7 +48,10 @@ export function setPositions(geometry: THREE.BufferGeometry, items: { pos: Vec3 
 }
 
 export class CommanderLayer {
+  /** The route and the systems visited: Layers → Travel history switches it. */
   readonly object = new THREE.Group();
+  /** Where you are now: stays on the map whatever the layers. */
+  readonly location = new THREE.Group();
   private jumps: Jump[] = [];
   /** From VisitedStarsCache.dat; when present it replaces the journal-derived set. */
   private cache: VisitedSystem[] | null = null;
@@ -72,8 +76,10 @@ export class CommanderLayer {
     this.route.frustumCulled = false;
     this.visited = overlayPoints(0x2c8a62, 4);
     this.marker = overlayPoints(0xff9a2e, 14);
-    this.object.add(this.route, this.visited, this.marker, this.pin.object);
+    this.object.add(this.route, this.visited);
     this.object.name = "commander";
+    this.location.add(this.marker, this.pin.object);
+    this.location.name = "commander-location";
   }
 
   setTrack(track: CommanderTrack): void {
