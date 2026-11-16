@@ -70,6 +70,8 @@ export interface Settings {
   homeSystem: SavedSystem | null;
   /** The system behind the Squadron jump button; null hides the button. */
   squadronSystem: SavedSystem | null;
+  /** The visited-stars caches the map reads: the game's own and any imported copy. */
+  visitedCaches: VisitedCacheFile[];
 }
 
 /** The jump buttons whose system the user picks. */
@@ -169,7 +171,19 @@ export interface CommanderPayload {
   latestFid: string | null;
 }
 
-/** An entry from the game's VisitedStarsCache.dat. */
+/** A VisitedStarsCache.dat the map reads (app/src-tauri/src/visited_files.rs). */
+export interface VisitedCacheFile {
+  path: string;
+  /** The copy imported in Settings, rather than one of the game's own. */
+  imported: boolean;
+  /** Systems it lists; null when it can't be read. */
+  systems: number | null;
+  /** Unix seconds when it last changed (for the copy: when it was imported). */
+  modified: number | null;
+  error: string | null;
+}
+
+/** An entry from the game's VisitedStarsCache.dat (or the imported copy). */
 export interface VisitedSystem {
   id64: string;
   visits: number;
@@ -451,6 +465,10 @@ export const useDataDir = (dir: string) => invoke<DataStatus>("use_data_dir", { 
 /** `null` goes back to the game's default journal folder. */
 export const setJournalDir = (dir: string | null) => invoke<void>("set_journal_dir", { dir });
 export const pickFolder = (title: string, start?: string) => invoke<string | null>("pick_folder", { title, start });
+export const pickFile = (title: string, filterName: string, extensions: string[]) =>
+  invoke<string | null>("pick_file", { title, filterName, extensions });
+/** Imports a copy of a visited-stars cache, replacing any earlier one; null removes it. */
+export const setVisitedImport = (path: string | null) => invoke<VisitedCacheFile[]>("set_visited_import", { path });
 export const setDetailsSource = (source: OnlineSource) => invoke<void>("set_details_source", { source });
 export const setUpdateReminders = (on: boolean) => invoke<void>("set_update_reminders", { on });
 export const diskSpace = (dir: string) => invoke<DiskSpace>("disk_space", { dir });

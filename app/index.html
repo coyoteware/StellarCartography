@@ -172,6 +172,19 @@
         </div>
       </section>
       <section>
+        <h2>Visited stars</h2>
+        <ul id="set-visited-list" class="visited-files"></ul>
+        <div class="buttons">
+          <button id="set-visited-import" type="button">Import a copy…</button>
+          <button id="set-visited-remove" type="button" hidden>Remove the copy</button>
+        </div>
+        <p class="muted small">
+          The game lists every system your account has visited in VisitedStarsCache.dat, in a numbered folder under
+          %LOCALAPPDATA%\Frontier Developments\Elite Dangerous. The map marks those systems even without journals. If
+          that file is gone too, import a copy from a backup or another PC.
+        </p>
+      </section>
+      <section>
         <h2>Jump buttons</h2>
         <!-- One name field per button (ui/settings.ts); both suggest from this list. -->
         <datalist id="bookmark-systems"></datalist>

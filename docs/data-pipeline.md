@@ -271,6 +271,7 @@ Code: [`journal.rs`](../crates/galaxy-core/src/journal.rs), [`visited.rs`](../cr
 
 **`VisitedStarsCache.dat`**
 - Read when the viewer asks. The format is undocumented and decoded by our own reader; the layout is in `visited.rs`.
+- The game's own files are read along with any copy imported in Settings (`imported-VisitedStarsCache.dat`, checked as a cache before it's kept). A system in several counts once, with the most visits and the latest visit.
 - Each id64 is looked up in `galaxy.sqlite`. Systems missing from the catalogue (14% for one tested account) are placed at their boxel's centre, accurate to 5–640 ly.
 
 ## Where everything lives
@@ -279,6 +280,7 @@ Code: [`journal.rs`](../crates/galaxy-core/src/journal.rs), [`visited.rs`](../cr
 | --- | --- |
 | Catalogue, tiles, density maps, `populated.bin`, `poi.json`, `ingest-stats.json` | the data folder (below) |
 | `details-cache.sqlite` | `%LOCALAPPDATA%\io.github.stellarcartography.viewer\` |
+| `imported-VisitedStarsCache.dat` (only once a copy is imported) | `%LOCALAPPDATA%\io.github.stellarcartography.viewer\` |
 | `settings.json` (written via a temporary file and a rename) | `%APPDATA%\io.github.stellarcartography.viewer\` |
 
 The data folder is the first of:
