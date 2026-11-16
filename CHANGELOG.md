@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 (2026-11-15)
 
 ### New
 - **Colour systems by star class.** Layers → "Colour systems by" → Star class
@@ -17,9 +17,9 @@
   the view is centred on, and a system's details list its region. Under it,
   "Mapping Project names" adds the Galactic Mapping Project's 64 names for
   parts of the galaxy (the Abyssal Plain, Mare Desperationis, the Local
-  Bubble...), smaller and dimmer, giving way to the codex names. The region map is
-  klightspeed's EliteDangerousRegionMap and the Mapping Project's outlines
-  come from EDSM; both ship with the app. The layer starts off.
+  Bubble...), smaller and dimmer, giving way to the codex names. The region
+  map is klightspeed's EliteDangerousRegionMap and the Mapping Project's
+  outlines come from EDSM; both ship with the app. The layer starts off.
 - **Friends on the map.** Settings → Friends takes commander names and marks
   each one's last known position as an ice-blue pin with a name label (its
   own layer, Layers → Friends). Positions come from EDSM, so a friend shows
@@ -47,9 +47,10 @@
   stats, location at login, jumps booked and cancelled, riding it through a
   jump) place your own carrier as a peach pin labelled with its name; it moves
   when a booked jump departs, and hovering it says where it's jumping next.
-  Squadron carriers are left out. Docked aboard it, you go where it goes: when it jumps while you're logged
-  off (or the game logs only its new location), your position moves with it
-  instead of staying where you last were.
+  Squadron carriers are left out. Docked aboard it, you go where it goes:
+  when it jumps while you're logged off (or the game logs only its new
+  location), your position moves with it instead of staying where you last
+  were.
 
 ### Changed
 - **Home and Squadron go where you choose.** They no longer point at fixed
