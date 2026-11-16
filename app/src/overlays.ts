@@ -10,11 +10,24 @@
 //   pairwise for colour-blind viewers on the map's dark background.
 // * Ordered categories (security, Powerplay state) take one hue in steps.
 // * Magnitudes (population, influence) take one hue, dark (low) to light (high).
+// * Star class runs hot to cool on the diverging blue-orange pair, blue for
+//   classes hotter than the Sun's G and orange from G down; star types off
+//   that sequence are grey and drawn bigger.
 // All hexes come from the validated reference palette (dark-mode steps).
 
 import { NONE_U8, tableFor, type CategoryColumn, type PopulatedData } from "./renderer/populated-data";
 
-export type OverlayId = "none" | "population" | "allegiance" | "government" | "economy" | "security" | "power" | "powerState" | "faction";
+export type OverlayId =
+  | "none"
+  | "population"
+  | "allegiance"
+  | "government"
+  | "economy"
+  | "security"
+  | "power"
+  | "powerState"
+  | "faction"
+  | "starClass";
 
 export const OVERLAYS: { id: OverlayId; label: string }[] = [
   { id: "none", label: "Nothing (stars only)" },
@@ -26,6 +39,7 @@ export const OVERLAYS: { id: OverlayId; label: string }[] = [
   { id: "power", label: "Powerplay power" },
   { id: "powerState", label: "Powerplay state" },
   { id: "faction", label: "Minor faction" },
+  { id: "starClass", label: "Star class" },
 ];
 
 export function isOverlayId(s: string): s is OverlayId {
@@ -70,7 +84,9 @@ export type Legend =
   | { kind: "nominal"; items: LegendItem[]; note: string }
   | { kind: "ordinal"; items: LegendItem[]; note: string }
   | { kind: "ramp"; colours: string[]; ticks: Tick[]; note: string }
-  | { kind: "faction"; faction: string | null; controls: number; present: number; colours: string[]; ticks: Tick[] };
+  | { kind: "faction"; faction: string | null; controls: number; present: number; colours: string[]; ticks: Tick[] }
+  /** The layer needs data the file on disk doesn't have yet. */
+  | { kind: "update"; note: string };
 
 export interface OverlayStyle {
   /** RGB per system, 0..255. */
@@ -111,7 +127,7 @@ export function isNominal(id: OverlayId): boolean {
 }
 
 export function isOrdinal(id: OverlayId): boolean {
-  return id === "security" || id === "powerState";
+  return id === "security" || id === "powerState" || id === "starClass";
 }
 
 // --- Styles -------------------------------------------------------------------
@@ -154,6 +170,8 @@ export function overlayStyle(data: PopulatedData, id: OverlayId, state: OverlayS
       });
     case "faction":
       return factionStyle(data, state.highlights[0] || null);
+    case "starClass":
+      return starClassStyle(data, state);
   }
 }
 
@@ -368,6 +386,127 @@ function ordinal(data: PopulatedData, column: CategoryColumn, scale: string[], s
       return rb - ra;
     });
   return { colour, size, order, legend: { kind: "ordinal", items, note: opts.note }, describe: opts.describe };
+}
+
+// --- Star class ---------------------------------------------------------------
+
+/**
+ * The spectral sequence, hottest first, on the diverging blue-orange pair.
+ * Blue steps 500, 400, 300, 200 for O to F; orange from G down is the
+ * categorical orange (#d95926) re-stepped to the blue ramp's OKLCH lightness
+ * (200, 300, 400, 500). Each arm passes the ordinal checks (monotone, ΔL
+ * ≥ 0.06, ≥ 3.5:1 on the map background); F and G, either side of the
+ * middle, stay apart for colour-blind viewers (CVD ΔE ≥ 8.6). Grey (other
+ * star types) sits as close as 7.1 to K under protanopia, so those dots are
+ * drawn bigger too.
+ */
+export const STAR_SEQUENCE: { key: string; colour: string }[] = [
+  { key: "O", colour: "#256abf" },
+  { key: "B", colour: "#3987e5" },
+  { key: "A", colour: "#6da7ec" },
+  { key: "F", colour: "#9ec5f4" },
+  { key: "G", colour: "#efb19b" },
+  { key: "K", colour: "#e28969" },
+  { key: "M", colour: "#d95926" },
+  { key: "Brown dwarf (L, T, Y)", colour: "#af4419" },
+];
+
+/**
+ * The legend group of a star type as Spansh spells it: the class letter for
+ * O to M (giants and supergiants included), one group for brown dwarfs, and
+ * a family name for everything off the main sequence.
+ */
+export function starClass(type: string): string {
+  const letter = /^([OBAFGKM]) \(/.exec(type);
+  if (letter) return letter[1];
+  if (/^[LTY] \(/.test(type)) return "Brown dwarf (L, T, Y)";
+  if (/^white dwarf/i.test(type)) return "White dwarf";
+  if (/^neutron/i.test(type)) return "Neutron star";
+  if (/black hole/i.test(type)) return "Black hole";
+  if (/^wolf-rayet/i.test(type)) return "Wolf-Rayet";
+  if (/^T Tauri/i.test(type)) return "T Tauri";
+  if (/^herbig/i.test(type)) return "Herbig Ae/Be";
+  // C, CN, CJ, CH and CHd.
+  if (/^C[A-Za-z]* Star$/.test(type)) return "Carbon star";
+  if (/^(MS|S)-type/i.test(type)) return "S-type";
+  return type.replace(/ Star$/, "");
+}
+
+const STAR_SIZE = 3.5;
+/** Star types off the sequence: grey, so drawn bigger (and on top) to stand out from the ramp. */
+const OTHER_STAR_SIZE = 5;
+
+function starClassStyle(data: PopulatedData, state: OverlayState): OverlayStyle {
+  const { colour, size } = blank(data);
+  const table = data.tables.mainStar;
+  if (table.length === 0) {
+    return {
+      colour,
+      size,
+      order: new Uint32Array(0),
+      legend: {
+        kind: "update",
+        note: "Your populated systems were downloaded before star types were kept. Update them to colour by star class.",
+      },
+      describe: () => "",
+    };
+  }
+  const rank = new Map(STAR_SEQUENCE.map((s, k) => [s.key, k]));
+  const classOf = table.map(starClass);
+  const colourOf = (key: string) => STAR_SEQUENCE[rank.get(key) ?? -1]?.colour ?? OTHER_COLOUR;
+  const typeRgb = classOf.map((key) => rgb(colourOf(key)));
+  const onSequence = classOf.map((key) => rank.has(key));
+  const shown = classOf.map((key) => !state.hidden.has(key));
+
+  const values = data.categories.mainStar;
+  const sequence: number[] = [];
+  const other: number[] = [];
+  let unknown = 0;
+  for (let i = 0; i < data.count; i++) {
+    const v = values[i];
+    if (v === NONE_U8 || v >= table.length) {
+      unknown++;
+      continue;
+    }
+    if (!shown[v]) continue;
+    setColour(colour, i, typeRgb[v]);
+    if (onSequence[v]) {
+      size[i] = STAR_SIZE;
+      sequence.push(i);
+    } else {
+      size[i] = OTHER_STAR_SIZE;
+      other.push(i);
+    }
+  }
+
+  const typeCounts = categoryCounts(data, "mainStar");
+  const classCounts = new Map<string, number>();
+  classOf.forEach((key, v) => classCounts.set(key, (classCounts.get(key) ?? 0) + typeCounts[v]));
+  const items: LegendItem[] = [...classCounts]
+    .filter(([, count]) => count > 0)
+    .map(([key, count]) => ({ key, count, colour: colourOf(key), on: !state.hidden.has(key) }))
+    // The sequence hottest first, then the rest by how common they are.
+    .sort(
+      (a, b) =>
+        (rank.get(a.key) ?? STAR_SEQUENCE.length) - (rank.get(b.key) ?? STAR_SEQUENCE.length) ||
+        b.count - a.count ||
+        a.key.localeCompare(b.key),
+    );
+  const note =
+    "Main star, hottest first; giants go with their letter. Other types are grey and drawn bigger. Click a class to hide or show it." +
+    (unknown === 1
+      ? " 1 system with no main star on record isn't shown."
+      : unknown
+        ? ` ${unknown.toLocaleString()} systems with no main star on record aren't shown.`
+        : "");
+  return {
+    colour,
+    size,
+    // The rarer types off the sequence draw on top.
+    order: Uint32Array.from([...sequence, ...other]),
+    legend: { kind: "ordinal", items, note },
+    describe: (i) => label(data, "mainStar", i),
+  };
 }
 
 // --- Minor factions ---------------------------------------------------------

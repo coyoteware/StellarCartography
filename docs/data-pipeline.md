@@ -115,11 +115,12 @@ controls the system, and it misses systems such as Achenar and Canopus.
   - Lines average about 200 KB, mostly bodies and station markets.
 - **Download:** the same resumable stream as the catalogue. Nothing raw is kept.
 - **Parsing:** one thread decompresses. Lines go in batches of 32 to up to 6 parser threads.
-- **Fields kept:** only the top-level ones; bodies, stations and markets are skipped unread.
+- **Fields kept:** the top-level ones, plus the `subType` of the body marked `mainStar`. Every other body field, stations and markets are skipped.
   - id64, name, coordinates, population;
   - allegiance, government, primary and secondary economy, security;
   - controlling faction, and each faction present with its influence;
   - controlling power, powers present, Powerplay state;
+  - main star type ("K (Yellow-Orange) Star");
   - date.
 
 ### Processing
@@ -146,12 +147,13 @@ Little-endian:
 | `id64` | u64 | system address |
 | `pos` | f32 × 3 | x, y, z in ly |
 | `population` | f64 | |
-| `allegiance`, `government`, `economy`, `secondEconomy`, `security`, `power`, `powerState` | u8 | index into the header's tables; 255 = none |
+| `allegiance`, `government`, `economy`, `secondEconomy`, `security`, `power`, `powerState`, `mainStar` | u8 | index into the header's tables; 255 = none |
 | `powers` | u32 | bitmask of every power present |
 | `controllingFaction` | u32 | faction index; `0xFFFFFFFF` = none |
 | `factionStart` | u32 × (n+1) | system i's factions are entries `factionStart[i]` to `factionStart[i+1]` |
 | `factionId`, `factionInfluence` | u32, u16 | faction index; influence in units of 0.01% |
 
+- `mainStar` came later, without a version bump. A file without it still loads; it just has no star types, and the star-class layer offers an update.
 - The file is written as `populated.bin.partial` and renamed into place when complete. The update first checks for room for a second copy.
 - The web view maps each column straight onto a typed array, without decoding ([`populated-data.ts`](../app/src/renderer/populated-data.ts)).
 - Catalogue rebuilds never touch this file.

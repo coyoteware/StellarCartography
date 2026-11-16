@@ -3,6 +3,13 @@
 ## Unreleased
 
 ### New
+- **Colour systems by star class.** Layers → "Colour systems by" → Star class
+  colours each populated system by its main star, hottest to coolest: O, B, A
+  and F in blue, then G, K, M and brown dwarfs in orange. Neutron stars, white
+  dwarfs, black holes and other types off the sequence are grey and drawn
+  bigger. Click a class in the legend to hide or show it; hover a dot for the
+  exact type. It needs one update of the populated systems (the layer offers
+  it), since older downloads didn't keep star types.
 - **Friends on the map.** Settings → Friends takes commander names and marks
   each one's last known position as an ice-blue pin with a name label (its
   own layer, Layers → Friends). Positions come from EDSM, so a friend shows

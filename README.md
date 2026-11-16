@@ -110,6 +110,14 @@ over the stars, which dim to make room:
   legend row to hide or show that level.
 - **Minor faction**: find a faction by name to see every system it's in, coloured
   by influence, with the systems it controls drawn bigger.
+- **Star class**: each system's main star, hottest to coolest: O, B, A and F in
+  blue steps, then G, K, M and brown dwarfs in orange steps, the way the
+  classes look in game. Giants count as their letter. Star types off that
+  sequence (neutron stars, white dwarfs, black holes, Wolf-Rayet, carbon
+  stars, T Tauri and so on) are grey and drawn bigger. Click a legend row to
+  hide or show a class; hover a dot for the exact type. Populated-system data
+  downloaded before this layer existed has no star types: the layer offers an
+  update.
 
 Hovering a dot shows the system and its value; clicking it opens the system's
 details. Only three colours are used at a time because, with dots side by side,

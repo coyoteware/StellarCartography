@@ -339,6 +339,17 @@ export class OverlayUi {
       case "faction":
         out.push(...this.factionLegend(legend));
         break;
+      case "update":
+        // While an update runs, its progress block above says the rest.
+        out.push(
+          h(
+            "div",
+            "overlay-prompt",
+            h("p", "small", legend.note),
+            !this.job.running && button("Update", () => void this.startUpdate(), "primary"),
+          ),
+        );
+        break;
       case "none":
         break;
     }

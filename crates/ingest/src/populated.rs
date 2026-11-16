@@ -1,13 +1,17 @@
 //! Populated systems for the map's overlay layers (population, allegiance,
-//! government, economy, security, Powerplay and minor factions), from
-//! Spansh's `galaxy_populated.json.gz` dump.
+//! government, economy, security, Powerplay, minor factions and main-star
+//! class), from Spansh's `galaxy_populated.json.gz` dump.
 //!
 //! Spansh's dump is the only one with the controlling power of every
 //! system: EDSM's `powerPlay.json.gz` lists each power present without
 //! saying which one controls, and misses systems such as Achenar. The dump
 //! is big (about 4.7 GB compressed, mostly bodies and station markets), but
-//! only a few top-level fields per system are kept, so the result is a file
-//! of a few megabytes that the web view reads in one go.
+//! only a few top-level fields per system are kept, plus the type of the
+//! body marked as the main star, so the result is a file of a few megabytes
+//! that the web view reads in one go.
+//!
+//! The `mainStar` column was added after the first files went out, without
+//! a version bump: readers treat a file without it as having no star types.
 //!
 //! `populated.bin` layout, little-endian:
 //!
@@ -117,6 +121,10 @@ pub struct Tables {
     /// Shared by `power` (the controlling power) and the `powers` bitmask.
     pub power: Vec<String>,
     pub power_state: Vec<String>,
+    /// The main star's type, as the dump spells it ("K (Yellow-Orange) Star").
+    /// Missing from files written before the column existed.
+    #[serde(default)]
+    pub main_star: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -153,6 +161,16 @@ struct Record {
     powers: Vec<String>,
     power_state: Option<String>,
     date: Option<String>,
+    /// Only the main star is kept; the other fields of every body are skipped.
+    #[serde(default)]
+    bodies: Vec<Body>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Body {
+    main_star: Option<bool>,
+    sub_type: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -190,6 +208,7 @@ struct System {
     powers: Vec<String>,
     power_state: Option<String>,
     date: Option<String>,
+    main_star: Option<String>,
 }
 
 /// Missing, empty and "None" all mean "not known / not applicable".
@@ -217,6 +236,7 @@ fn parse_line(line: &str) -> Option<System> {
         powers: r.powers.into_iter().filter_map(|p| value(Some(p))).collect(),
         power_state: value(r.power_state),
         date: r.date,
+        main_star: value(r.bodies.into_iter().find(|b| b.main_star == Some(true)).and_then(|b| b.sub_type)),
     })
 }
 
@@ -403,6 +423,7 @@ fn write_file(path: &Path, mut systems: Vec<System>, stats: &mut Stats) -> Resul
 
     let (mut allegiance, mut government, mut economy, mut security, mut power, mut power_state) =
         (Interner::default(), Interner::default(), Interner::default(), Interner::default(), Interner::default(), Interner::default());
+    let mut main_star = Interner::default();
     let mut factions = Interner::default();
     let mut cols = Columns { data: Vec::new(), index: BTreeMap::new() };
 
@@ -426,6 +447,8 @@ fn write_file(path: &Path, mut systems: Vec<System>, stats: &mut Stats) -> Resul
     cols.put("power", "u8", n, col);
     let col = u8_column(&mut power_state, &|s| s.power_state.as_deref());
     cols.put("powerState", "u8", n, col);
+    let col = u8_column(&mut main_star, &|s| s.main_star.as_deref());
+    cols.put("mainStar", "u8", n, col);
 
     // Every power present, as a bitmask over the power table.
     let masks: Vec<u32> = systems
@@ -482,6 +505,7 @@ fn write_file(path: &Path, mut systems: Vec<System>, stats: &mut Stats) -> Resul
             security: security.list,
             power: power.list,
             power_state: power_state.list,
+            main_star: main_star.list,
         },
         factions: factions.list,
         columns: cols.index,
@@ -534,7 +558,7 @@ mod tests {
     }
 
     // Trimmed from the live dump (2026-11-09); bodies and stations shortened.
-    const SOL: &str = r#"{"id64":10477373803,"name":"Sol","coords":{"x":0.0,"y":0.0,"z":0.0},"allegiance":"Federation","government":"Democracy","primaryEconomy":"Refinery","secondaryEconomy":"Service","security":"High","population":18320926115,"bodyCount":40,"controllingFaction":{"name":"Mother Gaia","state":"Expansion","government":"Democracy","allegiance":"Federation","activeStates":[{"state":"Expansion"}]},"factions":[{"name":"Federal Congress","allegiance":"Federation","government":"Democracy","influence":0.176471,"state":"None"},{"name":"Mother Gaia","allegiance":"Federation","government":"Democracy","influence":0.3001,"state":"Expansion","activeStates":[{"state":"Civil Liberty"}]}],"controllingPower":"Jerome Archer","powers":["Aisling Duval","Edmund Mahon","Jerome Archer"],"powerState":"Stronghold","powerStateControlProgress":0.604611,"date":"2026-11-08T20:36:20Z","bodies":[{"name":"Sol","type":"Star","subType":"G (White-Yellow) Star"}],"stations":[{"name":"Abraham Lincoln","market":{"commodities":[{"name":"Gold","buyPrice":1}]}}]}"#;
+    const SOL: &str = r#"{"id64":10477373803,"name":"Sol","coords":{"x":0.0,"y":0.0,"z":0.0},"allegiance":"Federation","government":"Democracy","primaryEconomy":"Refinery","secondaryEconomy":"Service","security":"High","population":18320926115,"bodyCount":40,"controllingFaction":{"name":"Mother Gaia","state":"Expansion","government":"Democracy","allegiance":"Federation","activeStates":[{"state":"Expansion"}]},"factions":[{"name":"Federal Congress","allegiance":"Federation","government":"Democracy","influence":0.176471,"state":"None"},{"name":"Mother Gaia","allegiance":"Federation","government":"Democracy","influence":0.3001,"state":"Expansion","activeStates":[{"state":"Civil Liberty"}]}],"controllingPower":"Jerome Archer","powers":["Aisling Duval","Edmund Mahon","Jerome Archer"],"powerState":"Stronghold","powerStateControlProgress":0.604611,"date":"2026-11-08T20:36:20Z","bodies":[{"name":"Mercury","type":"Planet","subType":"Metal-rich body"},{"name":"Sol","type":"Star","subType":"G (White-Yellow) Star","mainStar":true,"spectralClass":"G2"}],"stations":[{"name":"Abraham Lincoln","market":{"commodities":[{"name":"Gold","buyPrice":1}]}}]}"#;
     const CONTESTED: &str = r#"{"id64":5068732573097,"name":"LHS 3558","coords":{"x":-30.5,"y":12.25,"z":7.125},"allegiance":"Independent","government":"Anarchy","primaryEconomy":"Extraction","secondaryEconomy":"None","security":"Anarchy","population":5254,"controllingFaction":{"name":"LHS 3558 Gang"},"factions":[{"name":"LHS 3558 Gang","influence":1.0}],"powers":["Aisling Duval","Jerome Archer"],"powerState":"Unoccupied","powerConflictProgress":[{"power":"Jerome Archer","progress":0.53}],"date":"2026-11-07T18:30:45Z","bodies":[],"stations":[]}"#;
     const BARE: &str = r#"{"id64":42,"name":"Quiet","coords":{"x":1,"y":2,"z":3},"allegiance":"None","government":"None","primaryEconomy":"None","security":"Low","population":0,"factions":[],"date":"2025-01-01T00:00:00Z"}"#;
 
@@ -589,6 +613,10 @@ mod tests {
         assert_eq!(column(&bytes, &h, "secondEconomy"), &[NONE_U8, NONE_U8, 2]);
         assert_eq!(h.tables.economy, ["Extraction", "Refinery", "Service"]);
         assert_eq!(h.tables.security, ["Low", "Anarchy", "High"]);
+        // The body marked as the main star, wherever it is in the list; none
+        // for a system with no bodies listed.
+        assert_eq!(column(&bytes, &h, "mainStar"), &[NONE_U8, NONE_U8, 0]);
+        assert_eq!(h.tables.main_star, ["G (White-Yellow) Star"]);
 
         let power = column(&bytes, &h, "power");
         assert_eq!(power[0], NONE_U8);
@@ -645,6 +673,18 @@ mod tests {
         write_dump(&dump, &[SOL, CONTESTED, BARE]);
         let opts = Options { input: Input::File(dump), out: dir.path().to_path_buf(), limit: Some(2) };
         assert_eq!(build(&opts, &mut |_| {}, Arc::new(AtomicBool::new(false))).unwrap().systems, 2);
+    }
+
+    #[test]
+    fn reads_headers_from_before_the_main_star_column() {
+        let json = br#"{"version":1,"count":0,"presences":0,"source":"x","sourceLastModified":null,"newestUpdate":null,"builtAt":0,"names":[],"tables":{"allegiance":[],"government":[],"economy":[],"security":[],"power":[],"powerState":[]},"factions":[],"columns":{}}"#;
+        let mut bytes = MAGIC.to_vec();
+        bytes.extend(VERSION.to_le_bytes());
+        bytes.extend((json.len() as u32).to_le_bytes());
+        bytes.extend(json);
+        let h = read_header(&bytes).unwrap();
+        assert!(h.tables.main_star.is_empty());
+        assert!(!h.columns.contains_key("mainStar"));
     }
 
     #[test]

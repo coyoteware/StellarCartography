@@ -41,9 +41,11 @@ export interface Tables {
   /** Shared by `power` and the `powers` bitmask. */
   power: string[];
   powerState: string[];
+  /** The main star's type, as Spansh spells it ("K (Yellow-Orange) Star"). Empty in files from before the column. */
+  mainStar: string[];
 }
 
-export type CategoryColumn = "allegiance" | "government" | "economy" | "secondEconomy" | "security" | "power" | "powerState";
+export type CategoryColumn = "allegiance" | "government" | "economy" | "secondEconomy" | "security" | "power" | "powerState" | "mainStar";
 
 export interface PopulatedData {
   count: number;
@@ -102,6 +104,8 @@ export function parsePopulated(buf: ArrayBuffer): PopulatedData {
   };
   const u8 = (name: string) => column(name, "u8", (b, o, n) => new Uint8Array(b, o, n));
   const u32 = (name: string) => column(name, "u32", (b, o, n) => new Uint32Array(b, o, n));
+  // Added without a version bump: older files have no star types.
+  const hasMainStar = "mainStar" in header.columns;
 
   return {
     count: header.count,
@@ -117,13 +121,14 @@ export function parsePopulated(buf: ArrayBuffer): PopulatedData {
       security: u8("security"),
       power: u8("power"),
       powerState: u8("powerState"),
+      mainStar: hasMainStar ? u8("mainStar") : new Uint8Array(header.count).fill(NONE_U8),
     },
     powers: u32("powers"),
     controllingFaction: u32("controllingFaction"),
     factionStart: u32("factionStart"),
     factionId: u32("factionId"),
     factionInfluence: column("factionInfluence", "u16", (b, o, n) => new Uint16Array(b, o, n)),
-    tables: header.tables,
+    tables: { ...header.tables, mainStar: hasMainStar ? (header.tables.mainStar ?? []) : [] },
     factions: header.factions,
     source: header.source,
     sourceLastModified: header.sourceLastModified,
