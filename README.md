@@ -276,9 +276,10 @@ installed app won't find the repo's `data/` by itself: on first run, choose
 GitHub Actions ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs on
 Windows for every push and pull request: a frozen-lockfile install, a
 typecheck and build of the frontend, then clippy and the Rust tests. Pushes to
-`main` also build the installer and attach it to the run as an artifact (kept
-14 days); for any other branch, start the workflow from the Actions tab with
-"Run workflow".
+`main` and version tags also build the installer and attach it to the run as
+an artifact (kept 14 days); for any other branch, start the workflow from the
+Actions tab with "Run workflow". A version tag's run also drafts its GitHub
+release (see Releases).
 
 The same pipeline runs locally with
 
@@ -296,6 +297,21 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 pnpm --dir app typecheck
 ```
+
+## Releases
+
+1. Set the version in `Cargo.toml`, `app/package.json` and
+   `app/src-tauri/tauri.conf.json` (and let Cargo update `Cargo.lock`), date
+   the changelog's section, and write the release notes as
+   `docs/releases/<version>.md`.
+2. Commit that as "Release <version>" on `main`, tag it `v<version>`, and push
+   both.
+3. The tag's workflow run tests the tag, builds the installer and drafts a
+   GitHub release titled for the version, with the notes and the installer
+   attached. Look it over on GitHub and publish it.
+
+For a tag pushed before the workflow drafted releases, run it from the
+Actions tab with "release" set to the tag.
 
 ## Data and credits
 
