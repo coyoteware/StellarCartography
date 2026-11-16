@@ -53,7 +53,7 @@ export class CommanderLayer {
   /** Where you are now: stays on the map whatever the layers. */
   readonly location = new THREE.Group();
   private jumps: Jump[] = [];
-  /** From VisitedStarsCache.dat; when present it replaces the journal-derived set. */
+  /** From VisitedStarsCache.dat (and any imported copy); when present it replaces the journal-derived set. */
   private cache: VisitedSystem[] | null = null;
   private readonly route: THREE.Line;
   private readonly visited: THREE.Points;
@@ -100,7 +100,8 @@ export class CommanderLayer {
     return this.jumps.length;
   }
 
-  setVisitedCache(systems: VisitedSystem[]): void {
+  /** null goes back to the systems in the journals. */
+  setVisitedCache(systems: VisitedSystem[] | null): void {
     this.cache = systems;
     this.rebuild();
   }

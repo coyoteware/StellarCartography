@@ -192,6 +192,7 @@ const settingsPanel = new SettingsPanel({
   onKeys: () => keysCard.open(),
   friends: () => friendStatuses,
   onFriends: () => void refreshFriends(),
+  onVisited: () => void loadVisitedCache().catch((e) => toasts.error(`Couldn't read the visited stars: ${errorText(e)}`)),
 });
 overlay.onStatus = () => settingsPanel.renderPopulated();
 places.onStatus = () => settingsPanel.renderPoi();
@@ -254,6 +255,7 @@ function applyDimming(): void {
 
 /** Applies display preferences to the scene and (debounced) saves them. */
 function applyView(next: ViewSettings, persist = true): void {
+  const friendsShown = viewSettings.friends;
   viewSettings = next;
   view.exposure = next.exposure;
   if (cloud) {
@@ -266,6 +268,8 @@ function applyView(next: ViewSettings, persist = true): void {
   commander.object.visible = next.route;
   plot.object.visible = next.plot;
   friends.visible = next.friends;
+  // Friends aren't looked up while hidden (see boot): catch up on showing them.
+  if (next.friends && !friendsShown) void refreshFriends();
   showRegions(next.regions);
   $<HTMLInputElement>("layer-glow").checked = next.glow;
   $<HTMLInputElement>("layer-stars").checked = next.stars;
@@ -390,35 +394,66 @@ function setCommander(fid: string): void {
   commander.setTrack(track);
   updateLocation();
   showCarrier();
+  // The route planner's ship is this commander's.
+  void routeUi.refreshShip();
   view.wake();
 }
 
+/**
+ * The commander panel's text: where you are from the journals (or why they
+ * have nothing), and how many systems the visited-stars cache marks. The
+ * cache stands in for the journals' visited systems, so lost journals still
+ * leave them on the map.
+ */
 function updateLocation(): void {
   const cur = commander.current();
   const el = $("commander-location");
-  el.innerHTML = "";
-  if (!cur) {
-    el.textContent = "No jumps recorded";
-    return;
+  el.replaceChildren();
+  const missing = commanders?.found === false;
+  if (cur) {
+    const b = document.createElement("b");
+    b.textContent = cur.system;
+    el.append("At ", b, ` · ${commander.jumpCount.toLocaleString()} jumps, ${commander.visitedCount.toLocaleString()} systems`);
+  } else if (missing) {
+    const msg = document.createElement("div");
+    msg.className = "problem";
+    msg.textContent = visitedCache
+      ? "Journal folder not found, so there's no route or live location."
+      : "Journal folder not found, so there's no travel history.";
+    el.append(msg);
+  } else if (commanders) {
+    el.append(commanders.commanders.length ? "No jumps recorded." : "No jumps in the journals yet.");
   }
-  const b = document.createElement("b");
-  b.textContent = cur.system;
-  el.append("At ", b, ` · ${commander.jumpCount.toLocaleString()} jumps, ${commander.visitedCount.toLocaleString()} systems`);
   if (visitedCache) {
+    const total = visitedCache.total.toLocaleString();
+    const boxel = visitedCache.approximate ? ` (${visitedCache.approximate.toLocaleString()} placed by boxel)` : "";
     const note = document.createElement("div");
-    note.textContent =
-      `Visited-stars cache: ${visitedCache.total.toLocaleString()} systems` +
-      (visitedCache.approximate ? ` (${visitedCache.approximate} placed by boxel)` : "");
+    note.textContent = cur
+      ? `Visited-stars cache: ${total} systems${boxel}`
+      : `Showing ${total} visited systems from the game's visited-stars cache${boxel}.`;
     el.append(note);
+  }
+  if (missing) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "Set folder…";
+    button.addEventListener("click", () => void settingsPanel.open());
+    el.append(button);
   }
 }
 
+/** (Re)reads the visited-stars caches: the game's own and any copy imported in Settings. */
 async function loadVisitedCache(): Promise<void> {
   const systems = await visitedSystems();
-  if (systems.length === 0) return;
-  visitedCache = { total: systems.length, approximate: systems.filter((s) => s.approximate).length };
-  commander.setVisitedCache(systems);
+  visitedById.clear();
   for (const s of systems) visitedById.set(s.id64, s);
+  visitedCache = systems.length ? { total: systems.length, approximate: systems.filter((s) => s.approximate).length } : null;
+  commander.setVisitedCache(systems.length ? systems : null);
+  if (visitedCache) {
+    $("commander").hidden = false;
+    // The journals failed to load: there are no commanders to pick.
+    if (!commanders) $("commander-select").hidden = true;
+  }
   updateLocation();
   view.wake();
 }
@@ -431,28 +466,35 @@ function addCommanderOption(fid: string, name: string, jumps: number): void {
 }
 
 async function loadCommander(): Promise<void> {
-  commanders = await commanderHistory();
+  // Listening before the snapshot is taken, or a carrier change sent while it
+  // loads would be lost: the watcher sends each change once. Those that come
+  // in meanwhile are applied over the snapshot, in order; each is the whole
+  // carrier, and the last is never older than the snapshot.
+  let early: [string, Carrier | null][] | null = [];
+  await onCommanderCarrier((fid, carrier) => {
+    if (early) early.push([fid, carrier]);
+    else applyCarrier(fid, carrier);
+  });
+  try {
+    commanders = await commanderHistory();
+  } finally {
+    const pending = early ?? [];
+    early = null;
+    for (const [fid, carrier] of pending) applyCarrier(fid, carrier);
+  }
   const panel = $("commander");
   const picker = $<HTMLSelectElement>("commander-select");
-  const location = $("commander-location");
   panel.hidden = false;
 
   if (!commanders.found) {
     picker.hidden = true;
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = "Set folder…";
-    button.addEventListener("click", () => void settingsPanel.open());
-    const msg = document.createElement("div");
-    msg.className = "problem";
-    msg.textContent = "Journal folder not found, so there's no travel history.";
-    location.replaceChildren(msg, button);
+    updateLocation();
     return;
   }
 
   if (commanders.commanders.length === 0) {
     picker.hidden = true;
-    location.textContent = "No jumps in the journals yet.";
+    updateLocation();
   } else {
     for (const c of commanders.commanders) addCommanderOption(c.fid, c.name, c.jumps.length);
     picker.value = commanders.latestFid ?? commanders.commanders[0].fid;
@@ -475,21 +517,21 @@ async function loadCommander(): Promise<void> {
         selectedFid = fid;
       }
     }
-    track.jumps.push(jump);
+    // The journal's own record of a carrier jump that followCarrier already
+    // made at its departure takes that one's place.
+    const last = track.jumps[track.jumps.length - 1];
+    const replaces = last?.kind === "CarrierLocation" && last.system === jump.system;
+    if (replaces) track.jumps[track.jumps.length - 1] = jump;
+    else track.jumps.push(jump);
     // The journal now has a fresh snapshot of that system.
     systemPanel.refreshIfShowing(jump.id64);
     if (fid === selectedFid) {
-      commander.addJump(jump);
+      if (replaces) commander.setTrack(track);
+      else commander.addJump(jump);
       routeUi.onJump(jump);
       updateLocation();
       view.wake();
     }
-  });
-  await onCommanderCarrier((fid, carrier) => {
-    const track = commanders?.commanders.find((c) => c.fid === fid);
-    if (!track) return;
-    track.carrier = carrier;
-    if (fid === selectedFid) showCarrier();
   });
 }
 
@@ -497,8 +539,17 @@ async function loadCommander(): Promise<void> {
 
 let carrierTimer = 0;
 
-/** Where a carrier is now: at a booked jump's destination once it has departed. */
+/** A commander's carrier changed (or went: null). */
+function applyCarrier(fid: string, carrier: Carrier | null): void {
+  const track = commanders?.commanders.find((c) => c.fid === fid);
+  if (!track) return;
+  track.carrier = carrier;
+  if (fid === selectedFid) showCarrier();
+}
+
+/** Where a carrier is now: at a booked jump's destination once it has departed; nowhere once scrapped. */
 function carrierNow(c: Carrier): CarrierPlace | null {
+  if (c.scrappedAt && Date.parse(c.scrappedAt) <= Date.now()) return null;
   if (c.jump && Date.parse(c.jump.departure) <= Date.now()) return c.jump.to;
   return c.at;
 }
@@ -511,8 +562,10 @@ function showCarrier(): void {
   const place = c ? carrierNow(c) : null;
   carrierPin.set(c && place?.pos ? [{ pos: place.pos, label: c.name ?? c.callsign ?? "Carrier", carrier: c, place }] : []);
   if (track && c?.aboard && place) followCarrier(track, place);
-  const wait = c?.jump ? Date.parse(c.jump.departure) - Date.now() : NaN;
-  if (wait > 0) carrierTimer = window.setTimeout(showCarrier, Math.min(wait + 1000, 2 ** 31 - 1));
+  if (place) routeUi.onCarrierAt(place.system, place.id64);
+  // Again when a booked jump departs or the carrier is scrapped, whichever comes first.
+  const waits = [c?.jump?.departure, c?.scrappedAt].map((t) => (t ? Date.parse(t) - Date.now() : NaN)).filter((w) => w > 0);
+  if (waits.length) carrierTimer = window.setTimeout(showCarrier, Math.min(Math.min(...waits) + 1000, 2 ** 31 - 1));
   view.wake();
 }
 
@@ -1016,15 +1069,24 @@ async function boot(): Promise<void> {
 
   try {
     await loadCommander();
-    await loadVisitedCache();
   } catch (e) {
     console.error("commander data:", e);
     toasts.error(`Couldn't read the commander data: ${errorText(e)}`);
   }
+  // Apart from the journals: it's what's left when they're lost.
+  try {
+    await loadVisitedCache();
+  } catch (e) {
+    console.error("visited stars:", e);
+    toasts.error(`Couldn't read the visited stars: ${errorText(e)}`);
+  }
   // After the commander, so the saved route and ship know who's flying.
   void routeUi.load();
-  void refreshFriends();
-  window.setInterval(() => void refreshFriends(), FRIEND_POLL_MS);
+  // Only while they're drawn: turning the layer on looks them up again (applyView).
+  if (viewSettings.friends) void refreshFriends();
+  window.setInterval(() => {
+    if (viewSettings.friends) void refreshFriends();
+  }, FRIEND_POLL_MS);
   await galaxy;
 }
 

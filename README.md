@@ -217,6 +217,28 @@ in `%LOCALAPPDATA%\io.github.stellarcartography.viewer\details-cache.sqlite`.
 Settings → System details switches the online source, or turns lookups off
 (journal only).
 
+## Visited stars
+
+Layers → **Travel history** (Shift+3) draws your route from the journals and
+marks the systems you've visited. The marks come from the game's own
+`VisitedStarsCache.dat` when there is one. It sits in a numbered folder under
+`%LOCALAPPDATA%\Frontier Developments\Elite Dangerous` and lists every system
+the account has visited, with a visit count and the day of the last visit, so
+a commander whose journals are lost still sees where they've been. The
+commander panel says how many systems it marks, and a system's details show
+its visits. The file doesn't record the order of visits or where you are now,
+so without journals there's no route, live location or jump count. Systems
+missing from the catalogue (never uploaded to EDSM) have no name and are
+placed at the centre of their boxel, 5 to 640 ly from where they really are.
+
+If the cache is gone too (a new PC, say), Settings → Visited stars → **Import
+a copy…** takes a `VisitedStarsCache.dat` from a backup or another PC. The app
+keeps the copy as
+`%LOCALAPPDATA%\io.github.stellarcartography.viewer\imported-VisitedStarsCache.dat`
+and reads it with the game's own: a system in both counts once, with the
+higher visit count and the later visit. Importing again replaces the copy, and
+"Remove the copy" deletes it. The game's cache is read when the app starts.
+
 ## Jump buttons
 
 Home and Squadron, under the search box (keys 4 and 5), fly to systems you

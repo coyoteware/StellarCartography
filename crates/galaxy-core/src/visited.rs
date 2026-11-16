@@ -79,6 +79,26 @@ pub fn parse(data: &[u8]) -> Result<VisitedCache> {
     Ok(VisitedCache { version, ids: [u64_at(32), u64_at(40)], entries })
 }
 
+/// Combines the entries of several caches (the game's own and a copy from a
+/// backup, say): one entry per system, sorted by id64, with the most visits
+/// and the latest visit any of them records. An older copy of the same
+/// account's cache only ever has fewer, so summing would count visits twice.
+pub fn merge(entries: impl IntoIterator<Item = VisitedEntry>) -> Vec<VisitedEntry> {
+    let mut all: Vec<VisitedEntry> = entries.into_iter().collect();
+    all.sort_unstable_by_key(|e| e.id64);
+    let mut out: Vec<VisitedEntry> = Vec::with_capacity(all.len());
+    for e in all {
+        match out.last_mut() {
+            Some(last) if last.id64 == e.id64 => {
+                last.visits = last.visits.max(e.visits);
+                last.last_visit_day = last.last_visit_day.max(e.last_visit_day);
+            }
+            _ => out.push(e),
+        }
+    }
+    out
+}
+
 /// Every `VisitedStarsCache.dat` under the game's local app data folder.
 pub fn find_cache_files() -> Vec<PathBuf> {
     let Some(local) = std::env::var_os("LOCALAPPDATA") else { return Vec::new() };
@@ -120,6 +140,18 @@ mod tests {
         assert_eq!(cache.entries[0], VisitedEntry { id64: 10477373803, visits: 3, last_visit_day: 155525 });
         // 155525 days after 1601-01-01 is 2026-10-25, i.e. Unix day 20751.
         assert_eq!(cache.entries[0].last_visit_unix_day(), 20751);
+    }
+
+    #[test]
+    fn merges_copies_keeping_the_most_visits_and_the_latest_day() {
+        let e = |id64, visits, last_visit_day| VisitedEntry { id64, visits, last_visit_day };
+        let game = [e(30, 5, 155_600), e(10, 1, 155_000)];
+        let backup = [e(10, 3, 154_000), e(20, 2, 154_500), e(30, 4, 155_100)];
+        assert_eq!(
+            merge(game.into_iter().chain(backup)),
+            [e(10, 3, 155_000), e(20, 2, 154_500), e(30, 5, 155_600)],
+        );
+        assert!(merge([]).is_empty());
     }
 
     #[test]

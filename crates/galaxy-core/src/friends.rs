@@ -61,8 +61,9 @@ struct Response {
     is_docked: Option<bool>,
     station: Option<String>,
     ship_type: Option<String>,
+    /// When they were at `system`. Not `dateLastActivity`: that's when the
+    /// profile last did anything, wherever they were.
     date: Option<String>,
-    date_last_activity: Option<String>,
     url: Option<String>,
 }
 
@@ -87,7 +88,7 @@ pub fn parse(name: &str, body: &str) -> Result<FriendPosition> {
         known: true,
         system: r.system,
         pos: r.coordinates.map(|c| [c.x as f32, c.y as f32, c.z as f32]),
-        date: r.date.or(r.date_last_activity),
+        date: r.date,
         docked_at: r.station.filter(|_| r.is_docked == Some(true)),
         ship: r.ship_type,
         profile_url: r.url,

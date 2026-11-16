@@ -9,6 +9,7 @@ mod data;
 mod details;
 mod routes;
 mod settings;
+mod visited_files;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Component, Path, PathBuf};
@@ -46,6 +47,8 @@ struct AppState {
     plotter: routes::Plotter,
     /// Where the active plotted route is kept across restarts.
     route_path: PathBuf,
+    /// The visited-stars cache the user imported, if they have (see `visited_files`).
+    visited_import: PathBuf,
 }
 
 /// The current data folder and, when it holds a usable build, the open dataset.
@@ -146,6 +149,8 @@ struct SettingsView {
     keys: BTreeMap<String, Vec<String>>,
     home_system: Option<SavedSystem>,
     squadron_system: Option<SavedSystem>,
+    /// The visited-stars caches the map reads: the game's own and any imported copy.
+    visited_caches: Vec<visited_files::CacheFile>,
 }
 
 #[derive(Serialize, Clone)]
@@ -335,19 +340,18 @@ struct VisitedSystem {
     approximate: bool,
 }
 
-/// Systems from the game's visited-stars cache, placed using the catalogue
-/// where possible and the id64 boxel centre otherwise.
+/// Systems from the game's visited-stars caches and any imported copy,
+/// placed using the catalogue where possible and the id64 boxel centre otherwise.
 #[tauri::command]
 fn visited_systems(state: State<AppState>) -> CmdResult<Vec<VisitedSystem>> {
     let mut entries: Vec<VisitedEntry> = Vec::new();
-    for path in visited::find_cache_files() {
-        match std::fs::read(&path).map_err(anyhow::Error::from).and_then(|d| visited::parse(&d)) {
+    for (path, _) in visited_files::sources(&state.visited_import) {
+        match visited_files::read(&path) {
             Ok(cache) => entries.extend(cache.entries),
             Err(e) => eprintln!("{}: {e}", path.display()),
         }
     }
-    entries.sort_by_key(|e| e.id64);
-    entries.dedup_by_key(|e| e.id64);
+    let entries = visited::merge(entries);
 
     let slot = state.data.read().map_err(err)?;
     let db = slot.dataset.as_ref().map(|d| d.db.lock()).transpose().map_err(err)?;
@@ -396,6 +400,7 @@ fn save_settings(state: &AppState, settings: &Settings) -> CmdResult<()> {
 
 #[tauri::command]
 fn get_settings(state: State<AppState>) -> CmdResult<SettingsView> {
+    let visited_caches = visited_files::status(&visited_files::sources(&state.visited_import));
     let (data_dir, data_dir_origin) = {
         let slot = state.data.read().map_err(err)?;
         (display(&slot.dir), slot.origin)
@@ -415,6 +420,7 @@ fn get_settings(state: State<AppState>) -> CmdResult<SettingsView> {
         keys: settings.keys.clone(),
         home_system: settings.home_system.clone(),
         squadron_system: settings.squadron_system.clone(),
+        visited_caches,
     })
 }
 
@@ -492,6 +498,18 @@ fn set_journal_dir(state: State<AppState>, dir: Option<String>) -> CmdResult<()>
     save_settings(&state, &settings)?;
     *state.commander.lock().map_err(err)? = journal_dir(&settings).and_then(open_commander);
     Ok(())
+}
+
+/// Imports a copy of a visited-stars cache (from a backup or another PC) for
+/// the map to read beside the game's own, replacing any earlier copy; `None`
+/// removes the copy. Returns the caches the map now reads.
+#[tauri::command]
+fn set_visited_import(state: State<AppState>, path: Option<String>) -> CmdResult<Vec<visited_files::CacheFile>> {
+    match path {
+        Some(p) => visited_files::import(Path::new(&p), &state.visited_import, &visited::find_cache_files())?,
+        None => visited_files::remove(&state.visited_import)?,
+    }
+    Ok(visited_files::status(&visited_files::sources(&state.visited_import)))
 }
 
 #[tauri::command]
@@ -729,6 +747,20 @@ async fn pick_folder(app: AppHandle, title: String, start: Option<String>) -> Op
         dialog = dialog.set_directory(start);
     }
     dialog.blocking_pick_folder().and_then(|p| p.into_path().ok()).map(|p| display(&p))
+}
+
+/// Asks for one file, offering `extensions` (without the dot) first and any file second.
+#[tauri::command]
+async fn pick_file(app: AppHandle, title: String, filter_name: String, extensions: Vec<String>) -> Option<String> {
+    let extensions: Vec<&str> = extensions.iter().map(String::as_str).collect();
+    app.dialog()
+        .file()
+        .set_title(title)
+        .add_filter(filter_name, &extensions)
+        .add_filter("All files", &["*"])
+        .blocking_pick_file()
+        .and_then(|p| p.into_path().ok())
+        .map(|p| display(&p))
 }
 
 // --- Catalogue build ---------------------------------------------------------
@@ -1123,7 +1155,9 @@ pub fn run() {
             set_bookmark,
             use_data_dir,
             set_journal_dir,
+            set_visited_import,
             pick_folder,
+            pick_file,
             start_build,
             cancel_build,
             build_status,
@@ -1168,6 +1202,7 @@ pub fn run() {
                 online,
                 plotter: routes::Plotter::default(),
                 route_path: local.join("route.json"),
+                visited_import: local.join(visited_files::IMPORT_NAME),
             });
             spawn_journal_watcher(app.handle().clone());
             Ok(())

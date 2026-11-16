@@ -569,6 +569,18 @@ ul.friends-list {
   color: var(--text-muted);
 }
 
+/* --- Visited stars (settings) ------------------------------------------------ */
+
+ul.visited-files {
+  list-style: none;
+  margin: var(--space-2) 0;
+  padding: 0;
+}
+
+ul.visited-files .path-row {
+  margin-top: var(--space-1);
+}
+
 #set-friend-name {
   flex: 1;
   height: 28px;

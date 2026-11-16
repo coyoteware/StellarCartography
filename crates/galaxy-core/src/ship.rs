@@ -166,6 +166,10 @@ pub fn parse_loadout(line: &str) -> Option<ShipSpec> {
         return None;
     }
     let raw: RawLoadout = serde_json::from_str(line).ok()?;
+    // Apex taxis ("adder_taxi") carry the commander but aren't their ship.
+    if raw.ship.as_deref().is_some_and(|s| s.to_lowercase().ends_with("_taxi")) {
+        return None;
+    }
     let fuel = raw.fuel_capacity?;
     let fsd = raw.modules.iter().find(|m| m.slot == "FrameShiftDrive")?;
     let (overcharge, size, class) = parse_fsd_item(&fsd.item.to_lowercase())?;
@@ -257,5 +261,7 @@ mod tests {
         assert_eq!(parse_loadout("{ \"event\":\"Loadout\", broken"), None);
         // A loadout without an FSD (taxi, on foot) is no use for plotting.
         assert_eq!(parse_loadout(r#"{ "event":"Loadout", "Ship":"corsair", "UnladenMass":1.0, "FuelCapacity":{"Main":2.0}, "Modules":[] }"#), None);
+        // Nor is a taxi, drive or not.
+        assert_eq!(parse_loadout(&LOADOUT.replace(r#""Ship":"corsair""#, r#""Ship":"adder_taxi""#)), None);
     }
 }

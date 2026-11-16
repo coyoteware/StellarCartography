@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### New
+- **Import a visited-stars cache.** Settings → Visited stars lists the
+  game's `VisitedStarsCache.dat` files the map reads, and "Import a copy…"
+  adds one from a backup or another PC. Commanders who have lost both their
+  journals and the game's cache can still see the systems they've visited.
+  The copy is read with the game's own, and a system in both counts once.
+  README → Visited stars explains the cache.
+
+### Changed
+- **Visited systems without journals.** When the journal folder was missing
+  or empty, the commander panel said "No jumps recorded". It hid the "Set
+  folder…" button and the visited-stars count, even though the cache's
+  systems were on the map. It now says what's wrong with the journals, keeps
+  the button, and says the visited systems come from the game's cache. The
+  cache is also read when the journals fail to load.
+
 ## 0.3.0 (2026-11-15)
 
 ### New

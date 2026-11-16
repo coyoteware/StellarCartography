@@ -38,9 +38,8 @@ export const SHAPES = {
   plus: 9,
   // Ship pictograms, seen from above with the bow to the right.
   megaship: 10,
-  cruiser: 11,
-  carrier: 12,
-  carrierHub: 13,
+  carrier: 11,
+  carrierHub: 12,
 } as const;
 export type Shape = keyof typeof SHAPES;
 
@@ -269,11 +268,6 @@ export function glyph(shape: Shape, size = 12): SVGSVGElement {
 const SHIP_PATHS = {
   // A segmented spine with a command block amidships.
   megaship: ["M0.6 6.2H13.4L15.6 8L13.4 9.8H0.6ZM3.1 6.2V9.8H4V6.2ZM11.6 6.2V9.8H12.5V6.2Z", "M5.6 3.6H10V12.4H5.6Z"],
-  // A bulk cruiser: a thin spine carrying cargo pods.
-  cruiser: [
-    "M0.4 6.9H13.2L15.6 8L13.2 9.1H0.4Z",
-    "M2.6 3.6h3v2.9h-3ZM6.4 3.6h3v2.9h-3ZM10.2 3.6h3v2.9h-3ZM2.6 9.5h3v2.9h-3ZM6.4 9.5h3v2.9h-3ZM10.2 9.5h3v2.9h-3Z",
-  ],
   // A fleet carrier: pointed hull, engines across the stern, a landing pad cut out.
   carrier: ["M2 5.2H11.2L15.6 8L11.2 10.8H2ZM5.4 6.4V9.6H8.6V6.4Z", "M0.4 3.4H3V12.6H0.4Z"],
   // Three carriers in formation.

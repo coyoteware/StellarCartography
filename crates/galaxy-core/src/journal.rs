@@ -6,7 +6,8 @@
 //! the ones that say which commander is playing (`Commander`, `LoadGame`),
 //! `Docked`, `Undocked` and `ApproachSettlement` are read, and the owner's fleet-carrier
 //! events (`CarrierBuy`, `CarrierStats`, `CarrierLocation`,
-//! `CarrierJumpRequest`, `CarrierJumpCancelled`). The arrival, docking and
+//! `CarrierJumpRequest`, `CarrierJumpCancelled`, `CarrierDecommission`,
+//! `CarrierCancelDecommission`). The arrival, docking and
 //! approach events also describe the system and station (factions,
 //! Powerplay, services...); the latest line of each is kept as a
 //! [`Snapshot`] and parsed on demand (see [`crate::details::journal`]).
@@ -65,6 +66,10 @@ pub enum CarrierUpdate {
     JumpBooked { system: String, id64: u64, departure: String },
     /// `CarrierJumpCancelled`.
     JumpCancelled,
+    /// `CarrierDecommission`: it's scrapped at `scrap_time` (ISO).
+    Decommissioned { scrap_time: String },
+    /// `CarrierCancelDecommission`.
+    DecommissionCancelled,
 }
 
 /// The commander's own fleet carrier, as the owner's events describe it.
@@ -84,6 +89,8 @@ pub struct Carrier {
     /// a jump (`CarrierJump`); when it moves while they're logged off, or
     /// with only a `CarrierLocation` written, their position isn't updated.
     pub aboard: bool,
+    /// Being decommissioned: gone from this time on (ISO, UTC).
+    pub scrapped_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -128,6 +135,8 @@ impl Carrier {
                 self.jump = Some(CarrierJump { timestamp: timestamp.into(), departure, to });
             }
             CarrierUpdate::JumpCancelled => self.jump = None,
+            CarrierUpdate::Decommissioned { scrap_time } => self.scrapped_at = Some(scrap_time),
+            CarrierUpdate::DecommissionCancelled => self.scrapped_at = None,
         }
     }
 
@@ -308,9 +317,12 @@ struct RawEvent {
     /// `CarrierBuy`'s system.
     #[serde(rename = "Location")]
     location: Option<String>,
+    /// `CarrierDecommission`'s scrap time: Unix seconds (an ISO string is taken too).
+    #[serde(rename = "ScrapTime")]
+    scrap_time: Option<serde_json::Value>,
 }
 
-const INTERESTING: [&str; 17] = [
+const INTERESTING: [&str; 19] = [
     "\"FSDJump\"",
     "\"CarrierJump\"",
     "\"Location\"",
@@ -328,6 +340,8 @@ const INTERESTING: [&str; 17] = [
     "\"CarrierLocation\"",
     "\"CarrierJumpRequest\"",
     "\"CarrierJumpCancelled\"",
+    "\"CarrierDecommission\"",
+    "\"CarrierCancelDecommission\"",
 ];
 
 /// Parses one journal line. Returns `None` for events we don't use or for
@@ -390,7 +404,8 @@ pub fn parse_line(line: &str) -> Option<Event> {
                 status: None,
             })
         }
-        "CarrierBuy" | "CarrierStats" | "CarrierLocation" | "CarrierJumpRequest" | "CarrierJumpCancelled" => {
+        "CarrierBuy" | "CarrierStats" | "CarrierLocation" | "CarrierJumpRequest" | "CarrierJumpCancelled"
+        | "CarrierDecommission" | "CarrierCancelDecommission" => {
             // Squadron carriers write these too; older journals don't say which.
             if raw.carrier_type.as_deref().is_some_and(|t| t != "FleetCarrier") {
                 return None;
@@ -404,6 +419,14 @@ pub fn parse_line(line: &str) -> Option<Event> {
                     id64: raw.system_address?,
                     departure: raw.departure_time?,
                 },
+                "CarrierDecommission" => CarrierUpdate::Decommissioned {
+                    scrap_time: match raw.scrap_time? {
+                        serde_json::Value::Number(n) => crate::details::iso_from_unix(n.as_i64()?),
+                        serde_json::Value::String(s) => s,
+                        _ => return None,
+                    },
+                },
+                "CarrierCancelDecommission" => CarrierUpdate::DecommissionCancelled,
                 _ => CarrierUpdate::JumpCancelled,
             };
             Some(Event::Carrier { timestamp: raw.timestamp.unwrap_or_default(), id: raw.carrier_id?, update })
@@ -570,6 +593,11 @@ impl Reader {
                     self.snapshots.record_station(StationEvent::Approach, market_id, id64, &timestamp, line);
                 }
                 Some(Event::Loadout { timestamp }) => {
+                    // Only a ship the plotter can use: a taxi's or an
+                    // FSD-less loadout mustn't hide the commander's own.
+                    if crate::ship::parse_loadout(line).is_none() {
+                        continue;
+                    }
                     let fid = self.current_fid.clone().unwrap_or_else(|| "unknown".into());
                     let slot = self.loadouts.entry(fid).or_default();
                     if slot.timestamp.as_str() <= timestamp.as_str() {
@@ -899,6 +927,43 @@ mod tests {
         let c = snaps.stations_in(2).next().unwrap();
         assert_eq!(c.docked.as_ref().unwrap().line, "docked in 1");
         assert_eq!(c.docked_arrival.as_ref().unwrap().line, "jumped to 2");
+    }
+
+    #[test]
+    fn decommissioning_marks_the_carrier_until_cancelled() {
+        let decommission = r#"{ "timestamp":"2026-10-02T10:00:00Z", "event":"CarrierDecommission", "CarrierID":3708098048, "ScrapRefund":4850000000, "ScrapTime":1760004000 }"#;
+        let cancel = r#"{ "timestamp":"2026-10-03T10:00:00Z", "event":"CarrierCancelDecommission", "CarrierID":3708098048 }"#;
+        let Some(Event::Carrier { update, .. }) = parse_line(decommission) else { panic!("no decommission") };
+        assert_eq!(update, CarrierUpdate::Decommissioned { scrap_time: "2025-10-09T10:00:00Z".into() });
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Journal.2026-10-01T180000.01.log");
+        let mut f = File::create(&path).unwrap();
+        writeln!(f, "{COMMANDER}\n{CARRIER_BUY}\n{decommission}").unwrap();
+        f.flush().unwrap();
+        let mut source = JournalSource::new(dir.path().to_path_buf());
+        let scrapped = |source: &mut JournalSource| {
+            source.history().unwrap().commanders["F1234"].carrier.as_ref().unwrap().scrapped_at.clone()
+        };
+        assert_eq!(scrapped(&mut source).as_deref(), Some("2025-10-09T10:00:00Z"));
+        writeln!(f, "{cancel}").unwrap();
+        f.flush().unwrap();
+        source.poll().unwrap();
+        assert_eq!(scrapped(&mut source), None);
+    }
+
+    #[test]
+    fn keeps_the_newest_usable_loadout() {
+        let ship = r#"{ "timestamp":"2026-10-01T18:01:00Z", "event":"Loadout", "Ship":"corsair", "ShipIdent":"CO-31C", "UnladenMass":738.1, "FuelCapacity":{ "Main":32.0, "Reserve":0.41 }, "Modules":[ { "Slot":"FrameShiftDrive", "Item":"int_hyperdrive_size5_class5" } ] }"#;
+        let taxi = ship.replace("2026-10-01T18:01:00Z", "2026-10-01T18:30:00Z").replace(r#""corsair""#, r#""adder_taxi""#);
+        let no_fsd = r#"{ "timestamp":"2026-10-01T18:40:00Z", "event":"Loadout", "Ship":"python", "UnladenMass":1.0, "FuelCapacity":{"Main":2.0}, "Modules":[] }"#;
+        let dir = tempfile::tempdir().unwrap();
+        let mut f = File::create(dir.path().join("Journal.2026-10-01T180000.01.log")).unwrap();
+        writeln!(f, "{COMMANDER}\n{ship}\n{taxi}\n{no_fsd}").unwrap();
+        f.flush().unwrap();
+        let mut source = JournalSource::new(dir.path().to_path_buf());
+        assert_eq!(source.loadout(Some("F1234")).unwrap().map(|s| s.line.as_str()), Some(ship));
+        assert_eq!(source.loadout(None).unwrap().map(|s| s.line.as_str()), Some(ship));
     }
 
     #[test]

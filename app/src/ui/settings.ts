@@ -1,18 +1,21 @@
 // Settings panel: catalogue folder and rebuilds, journal folder, the
-// systems behind the jump buttons, the populated systems behind the overlay
-// layers, the points of interest, display preferences (point budget,
-// brightness), and the way to the keys.
+// visited-stars caches (and an imported copy), the systems behind the jump
+// buttons, the populated systems behind the overlay layers, the points of
+// interest, display preferences (point budget, brightness), and the way to
+// the keys.
 
 import {
   datasetInfo,
   getSettings,
   journalFriends,
+  pickFile,
   pickFolder,
   searchSystems,
   setDetailsSource,
   setFriends,
   setUpdateReminders,
   setJournalDir,
+  setVisitedImport,
   useDataDir,
   type DataStatus,
   type DirOrigin,
@@ -21,6 +24,7 @@ import {
   type OnlineSource,
   type Settings,
   type ViewSettings,
+  type VisitedCacheFile,
 } from "../api";
 import { BOOKMARKS, type Bookmarks } from "./bookmarks";
 import { DOWNLOAD_SIZES } from "./download";
@@ -59,6 +63,8 @@ export interface SettingsDeps {
   friends: () => FriendStatus[];
   /** The friends list changed (it's saved already): refresh the markers. */
   onFriends: () => void;
+  /** A visited-stars copy was imported or removed: redraw the visited systems. */
+  onVisited: () => void;
 }
 
 export class SettingsPanel {
@@ -125,6 +131,9 @@ export class SettingsPanel {
 
     $("set-journal-change").addEventListener("click", () => void this.changeJournalDir());
     $("set-journal-reset").addEventListener("click", () => void this.applyJournalDir(null));
+
+    $("set-visited-import").addEventListener("click", () => void this.importVisited());
+    $("set-visited-remove").addEventListener("click", () => void this.applyVisitedImport(null));
 
     for (const slot of BOOKMARKS) this.bookmarkField(slot);
 
@@ -306,6 +315,7 @@ export class SettingsPanel {
       : "Not found: travel history and live location are off until this points at the game's journal folder.";
     $("set-journal-status").classList.toggle("problem", !s.journalDirFound);
     $("set-journal-reset").hidden = !s.journalDirCustom;
+    this.renderVisited(s.visitedCaches);
 
     $<HTMLSelectElement>("set-details-source").value = s.detailsSource;
     $<HTMLInputElement>("set-update-reminders").checked = s.updateReminders;
@@ -317,6 +327,54 @@ export class SettingsPanel {
     const view = this.deps.view();
     $<HTMLSelectElement>("set-budget").value = String(view.pointBudget);
     $<HTMLInputElement>("set-exposure").value = String(Math.log2(view.exposure));
+  }
+
+  /** Lists the visited-stars caches the map reads, the imported copy last. */
+  private renderVisited(files: VisitedCacheFile[]): void {
+    const rows = files.map((f) => {
+      const what = f.imported ? "Imported copy" : "The game's cache";
+      const when = f.modified ? `${f.imported ? "imported" : "updated"} ${new Date(f.modified * 1000).toLocaleDateString()}` : "";
+      const meta = document.createElement("div");
+      meta.className = f.error ? "small problem" : "small";
+      meta.textContent = f.error
+        ? `${what} can't be read: ${f.error}`
+        : [what, `${(f.systems ?? 0).toLocaleString()} systems`, when].filter(Boolean).join(" · ");
+      const path = document.createElement("code");
+      path.textContent = f.path;
+      const row = document.createElement("div");
+      row.className = "path-row";
+      row.append(path);
+      const li = document.createElement("li");
+      li.append(meta, row);
+      return li;
+    });
+    if (rows.length === 0) {
+      const li = document.createElement("li");
+      li.className = "muted small";
+      li.textContent = "The game's cache isn't on this PC.";
+      rows.push(li);
+    }
+    $("set-visited-list").replaceChildren(...rows);
+    const imported = files.some((f) => f.imported);
+    $("set-visited-import").textContent = imported ? "Replace the copy…" : "Import a copy…";
+    $("set-visited-remove").hidden = !imported;
+  }
+
+  private async importVisited(): Promise<void> {
+    const path = await pickFile("Choose a copy of VisitedStarsCache.dat", "Visited stars cache", ["dat"]).catch(() => null);
+    if (path) await this.applyVisitedImport(path);
+  }
+
+  /** Imports the copy at `path`, replacing any earlier one; null removes it. */
+  private async applyVisitedImport(path: string | null): Promise<void> {
+    try {
+      const files = await setVisitedImport(path);
+      if (this.settings) this.settings.visitedCaches = files;
+      this.renderVisited(files);
+      this.deps.onVisited();
+    } catch (e) {
+      this.deps.toasts.error(errorText(e));
+    }
   }
 
   /**
