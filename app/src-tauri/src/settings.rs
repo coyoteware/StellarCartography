@@ -107,6 +107,10 @@ pub struct ViewSettings {
     pub friends: bool,
     /// Draw the distant galaxies behind the Milky Way.
     pub sky: bool,
+    /// Draw the galactic regions' edges and names.
+    pub regions: bool,
+    /// With the regions, the Galactic Mapping Project's names for parts of the galaxy.
+    pub mapped_regions: bool,
 }
 
 impl Default for ViewSettings {
@@ -125,6 +129,8 @@ impl Default for ViewSettings {
             poi_hidden: vec!["planetaryNebula".into()],
             friends: true,
             sky: true,
+            regions: false,
+            mapped_regions: true,
         }
     }
 }
@@ -203,6 +209,8 @@ mod tests {
         assert_eq!(partial.view.poi_hidden, ["planetaryNebula"]);
         assert_eq!(partial.details_source, OnlineSource::Spansh);
         assert!(partial.view.friends, "files from before the friends layer");
+        assert!(!partial.view.regions, "files from before the regions layer");
+        assert!(partial.view.mapped_regions, "files from before the Mapping Project names");
         assert!(partial.friends.is_empty(), "files from before the friends list");
 
         assert!(partial.update_reminders, "reminders are on unless turned off");

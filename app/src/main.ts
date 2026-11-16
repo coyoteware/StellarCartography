@@ -32,6 +32,7 @@ import {
 } from "./api";
 import { Bindings, Keyboard, chordLabel, loadLayout } from "./keys";
 import type { Poi } from "./poi";
+import { REGION_NAMES, regionAt } from "./regions";
 import { CommanderLayer, SelectionMarker } from "./renderer/commander";
 import { SGR_A, SOL, edToWorld, worldToEd } from "./renderer/coords";
 import { FriendsLayer, type FriendMarker } from "./renderer/friends";
@@ -39,6 +40,7 @@ import { GalaxyGlow } from "./renderer/glow";
 import { PinSet, stackPins, type PinItem } from "./renderer/pins";
 import { PointCloud } from "./renderer/pointcloud";
 import type { PoiLayer } from "./renderer/poi";
+import { RegionLayer } from "./renderer/regions";
 import { PlotLayer } from "./renderer/route";
 import { IntergalacticSky } from "./renderer/sky";
 import { View } from "./renderer/view";
@@ -105,7 +107,12 @@ let viewSettings: ViewSettings = {
   poiHidden: ["planetaryNebula"],
   friends: true,
   sky: true,
+  regions: false,
+  mappedRegions: true,
 };
+/** Built the first time it's shown (see `showRegions`). */
+let regions: RegionLayer | null = null;
+let regionsLoading = false;
 let reportedTileFailures = 0;
 /**
  * Bumped by every selection, and by closing the details: a lookup that
@@ -259,6 +266,7 @@ function applyView(next: ViewSettings, persist = true): void {
   commander.object.visible = next.route;
   plot.object.visible = next.plot;
   friends.visible = next.friends;
+  showRegions(next.regions);
   $<HTMLInputElement>("layer-glow").checked = next.glow;
   $<HTMLInputElement>("layer-stars").checked = next.stars;
   $<HTMLInputElement>("layer-route").checked = next.route;
@@ -266,6 +274,9 @@ function applyView(next: ViewSettings, persist = true): void {
   $<HTMLInputElement>("layer-poi").checked = next.poi;
   $<HTMLInputElement>("layer-friends").checked = next.friends;
   $<HTMLInputElement>("layer-sky").checked = next.sky;
+  $<HTMLInputElement>("layer-regions").checked = next.regions;
+  $<HTMLInputElement>("layer-mappedRegions").checked = next.mappedRegions;
+  $("layer-mappedRegions").parentElement!.hidden = !next.regions;
   overlay.sync();
   places.sync();
   applyDimming();
@@ -275,6 +286,32 @@ function applyView(next: ViewSettings, persist = true): void {
   saveTimer = window.setTimeout(() => {
     saveViewSettings(viewSettings).catch((e) => toasts.error(`Couldn't save settings: ${errorText(e)}`));
   }, 400);
+}
+
+/**
+ * Shows or hides the regions atlas. It's built (~100 ms, once the font is in)
+ * the first time it's shown, so it costs nothing while it stays off.
+ */
+function showRegions(on: boolean): void {
+  if (regions) {
+    regions.visible = on;
+    regions.showMapped = viewSettings.mappedRegions;
+    return;
+  }
+  if (!on || regionsLoading) return;
+  regionsLoading = true;
+  RegionLayer.create(view.renderer.capabilities.getMaxAnisotropy())
+    .then((layer) => {
+      regions = layer;
+      view.overlay.add(layer.object);
+      layer.visible = viewSettings.regions;
+      layer.showMapped = viewSettings.mappedRegions;
+      view.wake();
+    })
+    .catch((e) => {
+      regionsLoading = false;
+      toasts.error(`Couldn't draw the galactic regions: ${errorText(e)}`);
+    });
 }
 
 // --- Galaxy ------------------------------------------------------------------
@@ -603,7 +640,7 @@ $("go-cmdr").addEventListener("click", goCommander);
 $("go-home").addEventListener("click", goHome);
 $("go-squadron").addEventListener("click", goSquadron);
 $("open-settings").addEventListener("click", () => void settingsPanel.open());
-for (const layer of ["glow", "stars", "route", "plot", "poi", "friends", "sky"] as const) {
+for (const layer of ["glow", "stars", "route", "plot", "poi", "friends", "sky", "regions", "mappedRegions"] as const) {
   $<HTMLInputElement>(`layer-${layer}`).addEventListener("change", (e) =>
     applyView({ ...viewSettings, [layer]: (e.target as HTMLInputElement).checked }),
   );
@@ -631,6 +668,7 @@ for (const [id, layer] of [
   ["togglePoi", "poi"],
   ["togglePlot", "plot"],
   ["toggleSky", "sky"],
+  ["toggleRegions", "regions"],
 ] as const) {
   keyboard.on(id, () => applyView({ ...viewSettings, [layer]: !viewSettings[layer] }));
 }
@@ -889,6 +927,9 @@ view.onFrame((now, dt) => {
   commander.update(now);
   plot.update(now);
   overlay.layer?.update(view.pixelRatio);
+  const target = worldToEd(view.controls.target);
+  const region = regionAt(target[0], target[2]);
+  if (regions?.update(view.camera, canvas.clientWidth, canvas.clientHeight, dt, region)) view.wake();
   places.layer?.update(view.camera, canvas.clientWidth, canvas.clientHeight, view.pixelRatio, !view.idle);
   // You at the bottom of any stack, then your carrier, the bookmarks and friends.
   const pinSets = [commander.pin, carrierPin, squadronPin, homePin, friends.pins];
@@ -909,8 +950,9 @@ view.onFrame((now, dt) => {
     view.idle,
     stats,
     cloud?.totalPoints ?? 0,
-    worldToEd(view.controls.target),
+    target,
     view.camera.position.distanceTo(view.controls.target),
+    REGION_NAMES[region] || null,
   );
 });
 
@@ -936,6 +978,9 @@ if (import.meta.env.DEV) {
       },
       get glow() {
         return glow;
+      },
+      get regions() {
+        return regions;
       },
       sky,
       THREE,

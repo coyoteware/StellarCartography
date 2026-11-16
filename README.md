@@ -84,7 +84,7 @@ every row.
 | Orbit left, right, up, down | Q, E, T, G |
 | Zoom in, out | Z, X, or =, - |
 | Jump to Sol, the whole galaxy, your commander, your home system, your squadron capital | 1 to 5 (C and Home also work for commander and home) |
-| Galaxy glow, known systems, travel history, points of interest, plotted route, distant galaxies on/off | Shift+1 to Shift+6 |
+| Galaxy glow, known systems, travel history, points of interest, plotted route, distant galaxies, galactic regions on/off | Shift+1 to Shift+7 |
 | Search | / or Ctrl+F |
 | Places open/closed | P |
 | Settings | Ctrl+, |
@@ -123,6 +123,41 @@ controls. The dump is about 4.7 GB. The app streams it, keeps about 17 MB as
 The layers panel offers the first download. Settings → "Update from Spansh…"
 refreshes it whenever you like (Powerplay moves weekly). Catalogue rebuilds don't
 touch it.
+
+## Galactic regions
+
+Layers → **Galactic regions** (Shift+7) draws the galaxy's 42 codex regions
+like the galaxy map's atlas in game: their edges as hairlines on the galactic
+plane, and each region's name inside it. Names lie on the plane, turned to read
+the right way up, and tilt up towards the camera when it looks across the
+plane. They're drawn to scale while that's legible and kept between a readable
+and a modest size otherwise. Where two would overlap, the region the view is
+centred on keeps its name, then the regions with more room. The edges fade out
+towards the map's rim and when the view is level with the plane.
+
+The readout in the bottom-left corner names the region the view is centred
+on, and a system's details list the region it's in, whether or not the layer
+is on. Regions are columns through the plane, so height makes no difference.
+They're named from the system's coordinates, as the game does when you jump
+in; the journal and codex use the corner of the system's boxel, which can
+differ within a boxel's width of an edge.
+
+With the layer on, **Mapping Project names** (ticked unless you untick it)
+adds the [Galactic Mapping Project](https://www.edsm.net/en/galactic-mapping)'s
+64 names for parts of the galaxy, which explorers drew before the game had
+regions of its own: the Abyssal Plain, Mare Desperationis, the Local Bubble
+and so on. They're paler, widely spaced and lie flat on the plane, along the
+way their region runs where it's long and narrow, like a river's name on a
+map. They give way to the codex names: each has a few spots along its region
+and moves to a free one when the first is taken. Lying flat, they fade out as
+the view comes down towards the plane.
+
+The codex map comes from klightspeed's
+[EliteDangerousRegionMap](https://github.com/klightspeed/EliteDangerousRegionMap)
+(MIT): a 49 ly grid traced by following the region edges in game. The Mapping
+Project's names and outlines come from EDSM's galactic mapping data
+(`app/src/data/gmp-regions.json`). Both ship with the app, so there's nothing
+to download.
 
 ## Points of interest
 
@@ -264,6 +299,11 @@ pnpm --dir app typecheck
 - Points of interest: [EDAstro](https://edastro.com)'s Galactic Exploration
   Catalog, its copy of EDSM's Galactic Mapping Project, its fleet carrier list
   and its codex reports, all gathered by players.
+- Galactic regions: klightspeed's
+  [EliteDangerousRegionMap](https://github.com/klightspeed/EliteDangerousRegionMap),
+  MIT licensed (see `app/src/data/region-map.LICENSE`), and the
+  [Galactic Mapping Project](https://www.edsm.net/en/galactic-mapping)'s region
+  names and outlines from EDSM, drawn by the project's explorers.
 - The galaxy glow ray-marches a density map built from id64 boxel indices. The
   idea comes from [spansh/elite-galaxy-map](https://github.com/spansh/elite-galaxy-map);
   the shader and data here are our own.
