@@ -48,6 +48,7 @@ export const ACTIONS = [
   { id: "togglePoi", group: "Layers", label: "Points of interest on/off", keys: ["Shift+Digit4", ""] },
   { id: "togglePlot", group: "Layers", label: "Plotted route on/off", keys: ["Shift+Digit5", ""] },
   { id: "toggleSky", group: "Layers", label: "Distant galaxies on/off", keys: ["Shift+Digit6", ""] },
+  { id: "toggleRegions", group: "Layers", label: "Galactic regions on/off", keys: ["Shift+Digit7", ""] },
 
   { id: "search", group: "Panels", label: "Search", keys: ["Slash", "Ctrl+KeyF"] },
   { id: "places", group: "Panels", label: "Places open/closed", keys: ["KeyP", ""] },

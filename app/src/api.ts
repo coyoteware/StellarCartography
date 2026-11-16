@@ -43,6 +43,10 @@ export interface ViewSettings {
   friends: boolean;
   /** Draw the distant galaxies behind the Milky Way. */
   sky: boolean;
+  /** Draw the galactic regions' edges and names. */
+  regions: boolean;
+  /** With the regions, the Galactic Mapping Project's names for parts of the galaxy. */
+  mappedRegions: boolean;
 }
 
 /** Where the details panel looks systems up online; the other site is the fallback. */

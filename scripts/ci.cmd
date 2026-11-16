@@ -1,7 +1,7 @@
 @echo off
 setlocal
-rem Local build pipeline. Replaces the GitHub Actions workflow the repo used
-rem to have (.github/workflows/ci.yml) and runs the same steps:
+rem Local build pipeline: the same steps as the GitHub Actions workflow
+rem (.github/workflows/ci.yml), for checking before a push:
 rem
 rem   1. Frontend: frozen-lockfile install, typecheck + build (tsc && vite build)
 rem   2. cargo clippy --workspace --all-targets --locked -- -D warnings

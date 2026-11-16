@@ -19,6 +19,7 @@ import {
   type VisitedSystem,
 } from "../api";
 import { glyph, poiShape, type Poi } from "../poi";
+import { regionName } from "../regions";
 import { SOL, distance } from "../renderer/coords";
 import { h, type Child } from "./dom";
 import { errorText } from "./toast";
@@ -265,6 +266,7 @@ export class SystemPanel {
         ["Population", o?.population != null ? num(o.population) : null],
         ["Controlling faction", faction],
         ["Permit", o?.permit],
+        ["Region", regionName(system.pos)],
         ["Coordinates", system.pos.map((v) => v.toFixed(2)).join(", ")],
         ["From Sol", `${num(distance(system.pos, SOL), 2)} ly`],
         ["From you", you ? `${num(distance(system.pos, you), 2)} ly` : null],
