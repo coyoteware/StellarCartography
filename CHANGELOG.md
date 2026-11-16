@@ -6,12 +6,11 @@
 - **Galactic regions.** Layers → "Galactic regions" (Shift+7) draws the
   galaxy's 42 codex regions as an atlas, like the galaxy map in game: their
   edges as hairlines on the galactic plane and each region's name inside it,
-  lying on the plane and tilting up to stay legible when you look across it.
-  The bottom-left readout names the region the view is centred on, and a
-  system's details list its region. Under it, "Mapping Project names" adds
-  the Galactic Mapping Project's 64 names for parts of the galaxy (the
-  Abyssal Plain, Mare Desperationis, the Local Bubble...), paler and laid
-  along their arms, giving way to the codex names. The region map is
+  set like the map's other labels. The bottom-left readout names the region
+  the view is centred on, and a system's details list its region. Under it,
+  "Mapping Project names" adds the Galactic Mapping Project's 64 names for
+  parts of the galaxy (the Abyssal Plain, Mare Desperationis, the Local
+  Bubble...), smaller and dimmer, giving way to the codex names. The region map is
   klightspeed's EliteDangerousRegionMap and the Mapping Project's outlines
   come from EDSM; both ship with the app. The layer starts off.
 - **Friends on the map.** Settings → Friends takes commander names and marks

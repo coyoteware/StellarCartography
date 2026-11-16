@@ -300,7 +300,7 @@ function showRegions(on: boolean): void {
   }
   if (!on || regionsLoading) return;
   regionsLoading = true;
-  RegionLayer.create(view.renderer.capabilities.getMaxAnisotropy())
+  RegionLayer.create()
     .then((layer) => {
       regions = layer;
       view.overlay.add(layer.object);
@@ -929,7 +929,7 @@ view.onFrame((now, dt) => {
   overlay.layer?.update(view.pixelRatio);
   const target = worldToEd(view.controls.target);
   const region = regionAt(target[0], target[2]);
-  if (regions?.update(view.camera, canvas.clientWidth, canvas.clientHeight, dt, region)) view.wake();
+  regions?.update(view.camera, canvas.clientWidth, canvas.clientHeight, view.pixelRatio, region);
   places.layer?.update(view.camera, canvas.clientWidth, canvas.clientHeight, view.pixelRatio, !view.idle);
   // You at the bottom of any stack, then your carrier, the bookmarks and friends.
   const pinSets = [commander.pin, carrierPin, squadronPin, homePin, friends.pins];

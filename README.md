@@ -128,11 +128,11 @@ touch it.
 
 Layers → **Galactic regions** (Shift+7) draws the galaxy's 42 codex regions
 like the galaxy map's atlas in game: their edges as hairlines on the galactic
-plane, and each region's name inside it. Names lie on the plane, turned to read
-the right way up, and tilt up towards the camera when it looks across the
-plane. They're drawn to scale while that's legible and kept between a readable
-and a modest size otherwise. Where two would overlap, the region the view is
-centred on keeps its name, then the regions with more room. The edges fade out
+plane, and each region's name inside it, set like the map's other labels and
+the same size at any zoom. Where two would overlap, the region the view is
+centred on keeps its name, then the regions with more room. Names draw under
+the markers and pins. The edges are smoothed out of the region map's 49 ly
+steps, staying within about 50 ly of where the game puts them, and fade out
 towards the map's rim and when the view is level with the plane.
 
 The readout in the bottom-left corner names the region the view is centred
@@ -146,11 +146,9 @@ With the layer on, **Mapping Project names** (ticked unless you untick it)
 adds the [Galactic Mapping Project](https://www.edsm.net/en/galactic-mapping)'s
 64 names for parts of the galaxy, which explorers drew before the game had
 regions of its own: the Abyssal Plain, Mare Desperationis, the Local Bubble
-and so on. They're paler, widely spaced and lie flat on the plane, along the
-way their region runs where it's long and narrow, like a river's name on a
-map. They give way to the codex names: each has a few spots along its region
-and moves to a free one when the first is taken. Lying flat, they fade out as
-the view comes down towards the plane.
+and so on. They're smaller and dimmer than the codex names and give way to
+them: each has a few spots along its region and moves to a free one when the
+first is taken.
 
 The codex map comes from klightspeed's
 [EliteDangerousRegionMap](https://github.com/klightspeed/EliteDangerousRegionMap)
