@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- **Shift+right-drag looks around.** It turns the camera where it stands,
+  swinging the view's centre round with it, instead of orbiting the centre
+  like a plain drag. Right-drag alone still pans.
+
 ## 0.3.0 (2026-11-15)
 
 ### New

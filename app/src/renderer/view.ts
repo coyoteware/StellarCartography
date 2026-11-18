@@ -210,6 +210,8 @@ export class View {
   private lastFrame = 0;
   private flight: { from: THREE.Vector3; to: THREE.Vector3; fromDist: number; toDist: number; start: number; duration: number } | null = null;
   private driver: (() => Drive) | null = null;
+  /** The pointer turning the camera where it stands (Shift+right-drag), and where it was last. */
+  private look: { id: number; x: number; y: number } | null = null;
 
   constructor(readonly container: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
@@ -269,6 +271,10 @@ export class View {
     this.controls.zoomSpeed = 1.4;
 
     this.controls.addEventListener("change", () => this.wake());
+    // Shift+right-drag turns the camera where it stands, where OrbitControls
+    // would orbit the target. Listening on the container while capturing gets
+    // the press before the controls on the canvas do.
+    container.addEventListener("pointerdown", (e) => this.startLook(e), { capture: true });
     new ResizeObserver(() => this.resize()).observe(container);
     this.resize();
   }
@@ -429,6 +435,51 @@ export class View {
       this.controls.maxDistance,
     );
     this.camera.position.copy(target).add(offset.setFromSpherical(s));
+    this.wake();
+  }
+
+  private startLook(e: PointerEvent): void {
+    if (e.button !== 2 || !e.shiftKey || e.pointerType === "touch" || this.look || !this.controls.enabled) return;
+    // OrbitControls takes Shift+right-drag as an orbit; with rotation off it
+    // tracks the press and does nothing with it. Wheel zoom still works.
+    const rotate = this.controls.enableRotate;
+    this.controls.enableRotate = false;
+    // Taking the controls cancels a flight.
+    this.flight = null;
+    this.look = { id: e.pointerId, x: e.clientX, y: e.clientY };
+    const move = (ev: PointerEvent) => {
+      const look = this.look;
+      if (!look || ev.pointerId !== look.id) return;
+      this.turn(ev.clientX - look.x, ev.clientY - look.y);
+      look.x = ev.clientX;
+      look.y = ev.clientY;
+    };
+    const end = (ev: PointerEvent) => {
+      if (ev.pointerId !== this.look?.id) return;
+      this.look = null;
+      this.controls.enableRotate = rotate;
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", end);
+      document.removeEventListener("pointercancel", end);
+    };
+    document.addEventListener("pointermove", move);
+    document.addEventListener("pointerup", end);
+    document.addEventListener("pointercancel", end);
+  }
+
+  /**
+   * Turns the camera on the spot by a drag of (dx, dy) CSS pixels, swinging
+   * the target round with it at the same distance. The sky follows the
+   * pointer, as it does when orbiting and panning.
+   */
+  private turn(dx: number, dy: number): void {
+    const perPixel = (this.camera.fov * THREE.MathUtils.DEG2RAD) / Math.max(this.height, 1);
+    const ahead = this.controls.target.clone().sub(this.camera.position);
+    const s = new THREE.Spherical().setFromVector3(ahead);
+    s.theta += dx * perPixel;
+    s.phi = THREE.MathUtils.clamp(s.phi - dy * perPixel, 0.01, Math.PI - 0.01);
+    this.controls.target.copy(this.camera.position).add(ahead.setFromSpherical(s));
+    // The loop's controls.update() points the camera at the new target.
     this.wake();
   }
 

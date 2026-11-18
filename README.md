@@ -70,6 +70,10 @@ in Settings, or override it with `ED_JOURNAL_DIR`. Settings are saved in
 
 ## Keyboard
 
+With the mouse, drag to orbit the view's centre, right-drag to pan, and
+Shift+right-drag to turn the camera where it stands (the centre swings round
+with it). Scroll zooms toward the cursor.
+
 The map flies from the keyboard as well as the mouse. Every key can be
 changed: press F1 (or Settings → Keyboard → "Change keys…"), click a key, then
 press the new one. Esc cancels and Backspace clears it. Each action has two
